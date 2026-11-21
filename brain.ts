@@ -42,6 +42,8 @@ export const PARAMS = {
   practiceEngageRange: 60,
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
   hunterAim: 0,
+  /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
+  practiceCalmHp: 0,
   hunterRange: 150,
   hunterClose: 30,
   /** allow switching to the free-for-all survival policy */
@@ -801,7 +803,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         const at0 = attackers.get(m.id)
         const hpF = (m.hp ?? 1400) / (m.max_hp ?? 1400)
         const aimedAtUs = Math.abs(wrap(m.aim[0] - Math.atan2(y - m.pos[1], x - m.pos[0]))) < P.hunterAim
-        const nearRule = !ffa && P.hunterAim > 0 ? d < P.hunterClose || (aimedAtUs && d < P.hunterRange) : d < (ffa ? P.engageRange : P.practiceEngageRange)
+        const calm = !ffa && P.practiceCalmHp > 0 && me.hp < me.max_hp * P.practiceCalmHp
+        const nearRule = calm ? false : !ffa && P.hunterAim > 0 ? d < P.hunterClose || (aimedAtUs && d < P.hunterRange) : d < (ffa ? P.engageRange : P.practiceEngageRange)
         const engaged = (at0 != null && t - at0 < (ffa ? P.engageMemory : 6)) || nearRule || (ffa ? hpF < P.weakFrac && d < P.weakRange : hpF < 0.4 && d < 150) || m.id === lastTargetId ||
           (ffa && P.thirdPartyFrac > 0 && hpF < P.thirdPartyFrac && d < P.weakRange && t - (hurtByOther.get(m.id) ?? -99) < 4)
         if (!engaged) {
