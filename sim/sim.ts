@@ -334,6 +334,7 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
     w.cooldown = ws.cooldown
     if (w.ammo <= 0) w.reload = ws.reload
     emitSound("gun", m.pos, m.id)
+    ;(m as any).lastShotT = t
   }
   function fireMortar(m: Mech, w: Weapon) {
     const ws = m.wstats.mortar
@@ -538,6 +539,7 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
 
   // --- house bot AI (emulates the practice squad: shared vision, hunts our bot, weakest first) ---
   const RETALIATE = Number(process.env.RETALIATE ?? 1e9)
+  const HUNT_KNOW = (process.env.HUNT_KNOW ?? "1") === "1"
   const tierAim = (process.env.TIER_AIM ?? "0.06,0.04,0.025,0.012").split(",").map(Number)
   const tierLead = (process.env.TIER_LEAD ?? "0,0.5,0.8,1").split(",").map(Number)
   let squadKnown: { pos: V3; vel: V3; t: number } | null = null
@@ -563,6 +565,10 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
       if (o && o.alive) {
         const seenBySquad = mechs.some((h) => h.alive && h.ctrl.kind === "house" && seesMech(h, o))
         if (seenBySquad) squadKnown = { pos: [...o.pos] as V3, vel: [...o.vel] as V3, t }
+        else if (!HUNT_KNOW && (o as any).lastShotT != null && t - (o as any).lastShotT < 0.2 && (!squadKnown || t - squadKnown.t > 1)) {
+          // gunfire gives a rough fix to every house bot within earshot
+          squadKnown = { pos: [o.pos[0] + rng.gauss() * 15, o.pos[1] + rng.gauss() * 15, o.pos[2]] as V3, vel: [0, 0, 0], t }
+        }
         const d = hyp(m.pos[0], m.pos[1], o.pos[0], o.pos[1])
         const attacked = (m.damageBy.get(o.id) ?? -99) > t - 8 && d < RETALIATE
         if (hunters.has(m.id) || attacked || (seesMech(m, o) && d < 45)) enemy = o
@@ -578,6 +584,13 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
     if (m.offer) act.pick = 0
     let goal: [number, number] | null = null
     let wantFace: number | null = null
+    if (enemy) {
+      const visible0 = seesMech(m, enemy)
+      if (!visible0 && practice && !HUNT_KNOW && (!squadKnown || t - squadKnown.t > 20)) {
+        // no recent fix on us: sweep toward the next circle like everyone else
+        enemy = null
+      }
+    }
     if (enemy) {
       const visible = seesMech(m, enemy)
       const ep = visible || !squadKnown || !practice ? enemy.pos : squadKnown.pos

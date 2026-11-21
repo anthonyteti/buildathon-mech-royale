@@ -48,6 +48,12 @@ export const PARAMS = {
   maxEngage: 150,
   /** shoot back at a drone that is hitting us before poking distant mechs */
   npcThreat: true,
+  /** mechs closer than this keep priority over a drone that is hitting us (unless below 40% HP) */
+  npcOverride: 80,
+  /** a drone that is hitting us beats any mech above 40% HP */
+  npcAlways: false,
+  /** practice upgrade order override (comma list, best first); empty = built-in */
+  upgradeOrder: "",
   /** when two or more mechs are on us, back off to a longer range */
   kite: false,
   /** score bonus (metres) for a mech that hurt us in the last 4 s */
@@ -469,7 +475,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     if (obs.offer) {
       let best = 0, bestScore = -1
       obs.offer.choices.forEach((c, i) => {
-        const r = (ffa ? UPGRADE_PRIO_FFA : UPGRADE_PRIO).indexOf(c.id)
+        const r = (ffa ? UPGRADE_PRIO_FFA : P.upgradeOrder ? P.upgradeOrder.split(",") : UPGRADE_PRIO).indexOf(c.id)
         const sc = r < 0 ? 0 : 100 - r
         if (sc > bestScore) { bestScore = sc; best = i }
       })
@@ -593,7 +599,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         if (d < bd) { bd = d; npcTarget = m }
       }
     }
-    if (P.npcThreat && (!target || hyp2(x, y, target.pos[0], target.pos[1]) > 80)) {
+    if (P.npcThreat && (!target || hyp2(x, y, target.pos[0], target.pos[1]) > P.npcOverride || (P.npcAlways && (target.hp ?? 1400) > (target.max_hp ?? 1400) * 0.4))) {
       for (const m of obs.mechs) {
         if (m.kind !== "npc") continue
         const at = attackers.get(m.id)
