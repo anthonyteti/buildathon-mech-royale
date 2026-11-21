@@ -38,6 +38,8 @@ export const PARAMS = {
   selectiveFights: false,
   /** distance under which any visible mech is fought when fights are selective */
   engageRange: 55,
+  /** with selective fights in practice: fight any visible mech within this distance */
+  practiceEngageRange: 90,
   /** allow switching to the free-for-all survival policy */
   ffaMode: true,
   /** preferred distance when we only have the gun */
@@ -622,7 +624,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (ffa || P.selectiveFights) {
         // free-for-all: only take fights that are forced on us or cheap
         const at0 = attackers.get(m.id)
-        const engaged = (at0 != null && t - at0 < 6) || d < P.engageRange || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
+        const engaged = (at0 != null && t - at0 < 6) || d < (ffa ? P.engageRange : P.practiceEngageRange) || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
         if (!engaged) {
           if (d < watchD) { watchD = d; watch = m }
           continue
