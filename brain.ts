@@ -43,9 +43,9 @@ export const PARAMS = {
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
   hunterAim: 0,
   /** practice: from this time on, wait in a sheltered spot inside the next circle instead of roaming (0 = off) */
-  practiceHold: 15,
+  practiceHold: 5,
   /** practice: while holding, go for cubes only this far away */
-  holdCubeRange: 70,
+  holdCubeRange: 90,
   /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
   practiceCalmHp: 0,
   hunterRange: 150,
