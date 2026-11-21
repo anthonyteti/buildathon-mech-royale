@@ -79,6 +79,9 @@ export function makeBot(hello: Hello) {
   let dodgeUntil = -1
   let dodgeDir = 0
   let stuckCount = 0
+  /** weapons seen on the ground (they never despawn; forgotten once we see the spot empty) */
+  const knownPickups = new Map<number, { kind: string; pos: [number, number, number]; t: number }>()
+  let goalBudget = 10
   // practice (house squad hunting us) vs free-for-all detection
   let ffa = false
   let ourKills = 0
@@ -481,7 +484,7 @@ export function makeBot(hello: Hello) {
       if (sc < bestScore) { bestScore = sc; target = m }
     }
     let npcTarget: ActorObs | null = null
-    if (!target && me.hp > me.max_hp * 0.4 && !(ffa && (watch || t - lastMechSeenT < 5))) {
+    if (!target && me.hp > me.max_hp * 0.4 && t < 300 && !(ffa && (watch || t - lastMechSeenT < 5))) {
       let bd = Infinity
       for (const m of obs.mechs) {
         if (m.kind !== "npc") continue
@@ -697,6 +700,18 @@ export function makeBot(hello: Hello) {
       if (!secW) return true
       return (WEAPON_PRIO[kind] ?? 0) > (WEAPON_PRIO[secW.kind] ?? 0)
     }
+    // remember pickups; forget ones whose spot we can see empty
+    const visPick = new Set<number>()
+    for (const p of obs.pickups) {
+      visPick.add(p.id)
+      knownPickups.set(p.id, { kind: p.kind, pos: [p.pos[0], p.pos[1], p.pos[2]], t })
+    }
+    for (const e of obs.events) if (e.type === "took") knownPickups.delete(e.id)
+    for (const [id, kp] of knownPickups) {
+      if (visPick.has(id)) continue
+      const d = hyp2(x, y, kp.pos[0], kp.pos[1])
+      if (d < 40 && map.los(x, y, eyeZ, kp.pos[0], kp.pos[1], kp.pos[2] + 0.5)) knownPickups.delete(id)
+    }
     // take any pickup in range now
     for (const p of obs.pickups) {
       if (!wantWeapon(p.kind)) continue
@@ -722,12 +737,17 @@ export function makeBot(hello: Hello) {
           bestD = sc
           goal = [px, py]
           goalReason = reason
-          if (goalId !== id) { goalId = id; goalSince = t }
+          if (goalId !== id) { goalId = id; goalSince = t; goalBudget = 8 + d / 7 }
         }
       }
       for (const c of obs.cubes) consider(c.id, c.pos[0], c.pos[1], c.pos[2], target ? 25 : 90, 30, "cube")
-      for (const p of obs.pickups) if (wantWeapon(p.kind)) consider(p.id, p.pos[0], p.pos[1], p.pos[2], target ? 20 : secW ? 60 : 110, secW ? 0 : 40, "weapon")
-      if (goal && t - goalSince > 10) {
+      const kindBias: Record<string, number> = { lightning: 40, laser: 15, mortar: 0 }
+      for (const [id, kp] of knownPickups) {
+        if (!wantWeapon(kp.kind)) continue
+        const maxD = target ? 20 : !secW ? (t < 200 ? 200 : 110) : kp.kind === "lightning" ? 120 : 60
+        consider(id, kp.pos[0], kp.pos[1], kp.pos[2], maxD, (secW ? 0 : 40) + (kindBias[kp.kind] ?? 0), "weapon")
+      }
+      if (goal && t - goalSince > goalBudget) {
         blacklist.set(goalId, t + 30)
         goal = null
       }
@@ -747,7 +767,8 @@ export function makeBot(hello: Hello) {
 
     // crates as shoot targets when idle
     let bcActive = false
-    if (!fightTarget && !usedMortar && !(ffa && watch)) {
+    // late game: dealing damage to crates/drones would reset our HP regen
+    if (!fightTarget && !usedMortar && !(ffa && watch) && !(t > 300 && me.hp < me.max_hp)) {
       let bc: (typeof obs.crates)[number] | null = null, bd = 70
       for (const c of obs.crates) {
         const d = hyp2(x, y, c.pos[0], c.pos[1])
@@ -917,6 +938,16 @@ export function makeBot(hello: Hello) {
       const fast = !ffa && t < PARAMS.roamFastUntil
       speed = needNext > 0 || fast ? 1 : dw < 3 ? 0 : 0.42
       if (ffa) mode = "hold"
+    }
+
+    // endgame: once the last circle is set, stand on the final centre (kept inside the moving circle)
+    if (finalPhase && t > zone.shrink_start - 12) {
+      const c = clampToZone([ncx, ncy], zn)
+      const dc = hyp2(x, y, c[0], c[1])
+      const tol = t > zone.shrink_start ? 0.8 : 4
+      if (dc > tol) { navGoal = c; speed = dc < 4 ? 0.4 : 1; mode = "final" }
+      else if (!fightTarget) { navGoal = null; speed = 0; mode = "final" }
+      else { navGoal = null; speed = Math.min(speed, 0.5) }
     }
 
     if (t < dodgeUntil) {

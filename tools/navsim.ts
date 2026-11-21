@@ -97,7 +97,7 @@ function episode(ep: number) {
   let action: any = {}
   let deathT = -1
   const labels = new Map<string, number>()
-  for (tick = 0; tick < 20 * 380; tick += 2) {
+  for (tick = 0; tick < 20 * Number(process.env.TEND ?? 380); tick += 2) {
     const t = tick / 20
     const zone = zoneAt(t, centers)
     // instantaneous circle for damage
