@@ -106,7 +106,7 @@ function episode(ep: number) {
     const cr = zone.radius + (zone.next_radius - zone.radius) * f
     const inZone = Math.hypot(x - cx, y - cy) <= cr
     const obs = {
-      type: "obs", tick, t, alive: 1,
+      type: "obs", tick, t, alive: Number(process.env.ALIVE ?? 1),
       self: { id: 3, pos: [x, y, z], vel: [vx, vy, vz], aim: action.aim ?? [0, 0], hp, max_hp: 1400, energy, max_energy: 100, grounded, cubes: 0, upgrades: [], in_zone: inZone,
         weapons: [{ kind: "gun", cooldown: 0, ammo: 12, reload: 0, stats: cfgAll.weapons.gun }, null], stats: M },
       mechs: [], projectiles: [], crates: [], cubes: [], pickups: [], sounds: [], beams: [], events: [], zone, offer: null, drops: [],

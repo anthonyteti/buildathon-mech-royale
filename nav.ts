@@ -203,7 +203,7 @@ export class Planner {
         if (dh <= 1.2) cost = d * (1 + P[n]) + (dh < -1.2 ? 1 : 0)
         else {
           if (dh > maxClimb) continue
-          cost = d + 10 + 2.5 * dh
+          cost = d + 25 + 4 * dh
         }
         const ng = gc + cost
         if (st[n] !== gen || ng < g[n]) {

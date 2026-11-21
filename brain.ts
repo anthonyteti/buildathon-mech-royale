@@ -14,11 +14,28 @@ const wrap = (a: number) => {
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 const hyp2 = (ax: number, ay: number, bx: number, by: number) => Math.hypot(bx - ax, by - ay)
 
+const UPGRADE_PRIO_FFA = [
+  "plating", "armor", "nanites", "gun_rate", "lightning_efficiency", "laser_damage", "gun_damage",
+  "laser_charge", "lightning_range", "gun_mag", "servos", "gun_velocity", "mortar_reload", "lightning_chain",
+  "capacitor", "reactor", "jets", "gyros", "sensors", "mortar_splash", "mortar_velocity", "laser_pierce",
+]
 const UPGRADE_PRIO = [
   "armor", "plating", "gun_rate", "lightning_efficiency", "laser_damage", "gun_damage", "nanites",
   "laser_charge", "lightning_range", "gun_mag", "gun_velocity", "mortar_reload", "lightning_chain",
   "servos", "reactor", "capacitor", "jets", "gyros", "mortar_splash", "mortar_velocity", "sensors", "laser_pierce",
 ]
+/** Behaviour switches, so A/B variants are one-line changes. */
+export const PARAMS = {
+  /** follow a mech that dropped out of sight (v1 did this whenever our HP was above 50%) */
+  chaseAlways: false,
+  /** v1 healing: stand still in place when below 60% HP; otherwise heal from cover if we can find it */
+  healStill: false,
+  /** practice: roam at full speed (looking for drones, crates, cubes) until this time */
+  roamFastUntil: 150,
+  /** duck into cover while the gun reloads or when losing the HP race */
+  coverFight: true,
+}
+
 const WEAPON_PRIO: Record<string, number> = { lightning: 3, laser: 2, mortar: 1, gun: 0 }
 
 class Rng {
@@ -62,6 +79,12 @@ export function makeBot(hello: Hello) {
   let dodgeUntil = -1
   let dodgeDir = 0
   let stuckCount = 0
+  // practice (house squad hunting us) vs free-for-all detection
+  let ffa = false
+  let ourKills = 0
+  let infight = 0
+  const lastHp = new Map<number, number>()
+  let lastMechSeenT = -99
   const chargeStart = new Map<number, number>()
   let dodgeBoost = false
   let dodgeCover = false
@@ -77,6 +100,14 @@ export function makeBot(hello: Hello) {
       cy: z.center[1] + (z.next_center[1] - z.center[1]) * f,
       r: z.radius + (z.next_radius - z.radius) * f,
     }
+  }
+
+  /** Pull a goal point inside the current (moving) circle, keeping a margin from its edge. */
+  function clampToZone(g: [number, number], zn: { cx: number; cy: number; r: number }): [number, number] {
+    const lim = Math.max(0, zn.r - Math.max(6, zn.r * 0.35))
+    const d = hyp2(zn.cx, zn.cy, g[0], g[1])
+    if (d <= lim) return g
+    return [zn.cx + ((g[0] - zn.cx) / d) * lim, zn.cy + ((g[1] - zn.cy) / d) * lim]
   }
 
   /** Steering with a short obstacle probe. Returns [mx,my,jump,boost]. */
@@ -180,6 +211,29 @@ export function makeBot(hello: Hello) {
     return true
   }
 
+  /** Closest walkable spot within maxR of us that a viewer at (ex,ey,ez) cannot see. */
+  function findCover(x: number, y: number, z: number, ex: number, ey: number, ez: number, maxR: number): [number, number] | null {
+    for (const r of [3, 5, 7.5, 10, 13, 16, 20]) {
+      if (r > maxR) break
+      let best: [number, number] | null = null, bestScore = Infinity
+      for (let k = 0; k < 16; k++) {
+        const a = (k * Math.PI) / 8
+        const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r
+        const pz = map.topAt(px, py)
+        if (pz > z + stepUp || pz < z - 6) continue
+        if (!lineClear(x, y, z, px, py)) continue
+        if (map.los(ex, ey, ez, px, py, pz + 4.5) || map.los(ex, ey, ez, px, py, pz + 8.5)) continue
+        // prefer spots that do not move us toward the viewer
+        const sc = -hyp2(px, py, ex, ey)
+        if (sc < bestScore) { bestScore = sc; best = [px, py] }
+      }
+      if (best) return best
+    }
+    return null
+  }
+  let coverCache: { id: number; t: number; p: [number, number] | null } | null = null
+
+
   /** Move toward (gx,gy) along a planned path; falls back to local steering. */
   function navMove(obs: Observation, gx: number, gy: number, speed: number): { mx: number; my: number; jump: boolean; boost: boolean } {
     const me = obs.self
@@ -189,7 +243,7 @@ export function makeBot(hello: Hello) {
     if (!nav || !planner) return steer(obs, Math.atan2(gy - y, gx - x), speed)
     if (dGoal < 10 && lineClear(x, y, z, gx, gy)) {
       navLabel = "direct"
-      return steer(obs, Math.atan2(gy - y, gx - x), speed)
+      return steer(obs, Math.atan2(gy - y, gx - x), Math.min(speed, 0.3 + dGoal / 10))
     }
     // replanning
     const goalMoved = !plan || hyp2(plan.gx, plan.gy, gx, gy) > Math.max(8, dGoal * 0.15)
@@ -234,7 +288,8 @@ export function makeBot(hello: Hello) {
     // climb needed soon?
     let climbIdx = -1
     for (let i = best + 1; i < Math.min(P.length, best + 4); i++) {
-      if (H[P[i]] > z + stepUp - 0.1) { climbIdx = i; break }
+      const prevH = i === best + 1 ? z + 0.4 : H[P[i - 1]]
+      if (H[P[i]] > prevH + stepUp - 0.1 || H[P[i]] > z + 2.5) { climbIdx = i; break }
       if (hyp2(x, y, nav.cx(P[i]), nav.cy(P[i])) > 6) break
     }
     if (climbIdx >= 0) {
@@ -255,7 +310,7 @@ export function makeBot(hello: Hello) {
     let tgt = best + 1
     for (let i = Math.min(P.length - 1, best + 10); i > best + 1; i--) {
       let ok = true
-      for (let k = best + 1; k <= i; k++) if (H[P[k]] > z + stepUp - 0.1) { ok = false; break }
+      for (let k = best + 1; k <= i; k++) if (H[P[k]] > (k === best + 1 ? z + 0.4 : H[P[k - 1]]) + stepUp - 0.1 || H[P[k]] > z + 2.5) { ok = false; break }
       if (ok && lineClear(x, y, z, nav.cx(P[i]), nav.cy(P[i]))) { tgt = i; break }
     }
     const tx = nav.cx(P[tgt]), ty = nav.cy(P[tgt])
@@ -263,7 +318,8 @@ export function makeBot(hello: Hello) {
     // airborne after a climb: keep jetting over the lip if the surface under the target is above us
     const yaw = Math.atan2(ty - y, tx - x)
     const boostAir = !me.grounded && H[P[tgt]] > z - 0.5 && me.vel[2] < 2
-    return { mx: Math.cos(yaw) * speed, my: Math.sin(yaw) * speed, jump: false, boost: boostAir }
+    const sp = me.grounded ? speed : 1
+    return { mx: Math.cos(yaw) * sp, my: Math.sin(yaw) * sp, jump: false, boost: boostAir }
   }
 
   function targetHeight(a: ActorObs): number {
@@ -318,7 +374,7 @@ export function makeBot(hello: Hello) {
     if (obs.offer) {
       let best = 0, bestScore = -1
       obs.offer.choices.forEach((c, i) => {
-        const r = UPGRADE_PRIO.indexOf(c.id)
+        const r = (ffa ? UPGRADE_PRIO_FFA : UPGRADE_PRIO).indexOf(c.id)
         const sc = r < 0 ? 0 : 100 - r
         if (sc > bestScore) { bestScore = sc; best = i }
       })
@@ -336,6 +392,31 @@ export function makeBot(hello: Hello) {
         }
       }
     }
+    const hitNow = new Set<number>()
+    for (const e of obs.events) {
+      if (e.type === "kill") ourKills++
+      else if (e.type === "hit") hitNow.add(e.target)
+    }
+    if (!ffa) {
+      const totalMechs = cfg.match.mechs ?? 16
+      const othersDead = totalMechs - obs.alive - ourKills
+      // beams that end on a mech other than us: mechs fighting each other
+      for (const b of obs.beams) {
+        const end = b.path[b.path.length - 1]
+        if (!end) continue
+        for (const m of obs.mechs) {
+          if (m.kind !== "mech" || m.id === b.by) continue
+          if (hyp2(end[0], end[1], m.pos[0], m.pos[1]) < 4) { infight += 1; break }
+        }
+      }
+      for (const m of obs.mechs) {
+        if (m.kind !== "mech" || m.hp == null) continue
+        const prev = lastHp.get(m.id)
+        if (prev != null && m.hp < prev - 40 && !hitNow.has(m.id)) infight += 0.5
+      }
+      if ((othersDead >= 4 && t < 200) || othersDead >= 6 || infight >= 3) ffa = true
+    }
+    for (const m of obs.mechs) if (m.kind === "mech" && m.hp != null) lastHp.set(m.id, m.hp)
     for (const s of obs.sounds) {
       if ((s.kind === "gun" || s.kind === "laser" || s.kind === "laser_charge" || s.kind === "lightning" || s.kind === "mortar" || s.kind === "step" || s.kind === "boost" || s.kind === "jet") && s.dist !== "far") {
         if (t - threatT > 1.5) {
@@ -374,12 +455,24 @@ export function makeBot(hello: Hello) {
     const mz = z + muzzleH
 
     let target: ActorObs | null = null
+    let watch: ActorObs | null = null
+    let watchD = Infinity
     let bestScore = Infinity
     for (const m of obs.mechs) {
       if (m.kind !== "mech") continue
       const d = hyp2(x, y, m.pos[0], m.pos[1])
       const vis = map.los(x, y, eyeZ, m.pos[0], m.pos[1], m.pos[2] + targetHeight(m))
       if (vis) lastVis.set(m.id, t)
+      lastMechSeenT = t
+      if (ffa) {
+        // free-for-all: only take fights that are forced on us or cheap
+        const at0 = attackers.get(m.id)
+        const engaged = (at0 != null && t - at0 < 6) || d < 55 || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
+        if (!engaged) {
+          if (d < watchD) { watchD = d; watch = m }
+          continue
+        }
+      }
       let sc = d + (m.hp ?? 1400) / 20 + (vis ? 0 : 120)
       if (m.id === lastTargetId) sc -= 25
       if (m.charging) sc -= 20
@@ -388,7 +481,7 @@ export function makeBot(hello: Hello) {
       if (sc < bestScore) { bestScore = sc; target = m }
     }
     let npcTarget: ActorObs | null = null
-    if (!target && me.hp > me.max_hp * 0.4) {
+    if (!target && me.hp > me.max_hp * 0.4 && !(ffa && (watch || t - lastMechSeenT < 5))) {
       let bd = Infinity
       for (const m of obs.mechs) {
         if (m.kind !== "npc") continue
@@ -471,7 +564,7 @@ export function makeBot(hello: Hello) {
       } else if (t > dodgeUntil) {
         dodgeUntil = t + 0.5
         dodgeDir = toMe + (rng.next() < 0.5 ? 1 : -1) * Math.PI / 2
-        dodgeBoost = me.energy > 30
+        dodgeBoost = false
         dodgeCover = false
       }
     }
@@ -533,7 +626,7 @@ export function makeBot(hello: Hello) {
       const tol = rad * 0.9 + 0.5
       const gunRange = gun?.stats.range ?? W.gun.range
       const tSpeed = Math.hypot(fightTarget.vel[0], fightTarget.vel[1])
-      const longShotOk = d < 170 || tSpeed < 4
+      const longShotOk = !ffa || d < 170 || tSpeed < 4
       if (gun && gunSlot >= 0 && vis && longShotOk && d < gunRange * 0.97 && e.lin < tol + d * 0.004 && (gun.ammo ?? 1) > 0 && (gun.reload ?? 0) <= 0) {
         if (gunSlot === 0) fire0 = true
         else fire1 = true
@@ -642,7 +735,8 @@ export function makeBot(hello: Hello) {
       if (!goal && !target) {
         for (const dr of obs.drops) {
           const d = hyp2(x, y, dr.pos[0], dr.pos[1])
-          if (d < 160 && dr.lands_in < d / walk + 3 && (dr.holder == null || dr.holder === me.id)) {
+          const dropRange = ffa ? (t - lastMechSeenT > 8 ? 120 : 0) : 250
+          if (d < dropRange && dr.lands_in < d / walk + 3 && (dr.holder == null || dr.holder === me.id)) {
             goal = [dr.pos[0], dr.pos[1]]
             goalReason = "drop"
             break
@@ -653,7 +747,7 @@ export function makeBot(hello: Hello) {
 
     // crates as shoot targets when idle
     let bcActive = false
-    if (!fightTarget && !usedMortar) {
+    if (!fightTarget && !usedMortar && !(ffa && watch)) {
       let bc: (typeof obs.crates)[number] | null = null, bd = 70
       for (const c of obs.crates) {
         const d = hyp2(x, y, c.pos[0], c.pos[1])
@@ -703,6 +797,7 @@ export function makeBot(hello: Hello) {
       if (finalPhase || zone.next_radius < 20 || dNext < 1) navGoal = [ncx, ncy]
       else navGoal = [ncx + ((x - ncx) / dNext) * r * 0.8, ncy + ((y - ncy) / dNext) * r * 0.8]
       if (dCur > zn.r - 3) navGoal = [ncx, ncy]
+      navGoal = clampToZone(navGoal, zn)
       speed = 1
       if (dCur > zn.r - 3 || (timeToShrink < travel && needNext > 20)) boost = me.energy > 25
     } else if (fightTarget) {
@@ -714,9 +809,13 @@ export function makeBot(hello: Hello) {
         strafeSign = rng.next() < 0.5 ? 1 : -1
         strafeFlipT = t + 0.8 + rng.next() * 1.4
       }
+      const tw = fightTarget.weapons ?? []
       let want: number
       if (secW?.kind === "lightning" && me.energy > 20) want = 28
       else if (fightTarget.kind === "npc") want = 40
+      else if (tw.includes("lightning")) want = 80
+      else if (secW?.kind === "laser") want = 90
+      else if (secW?.kind === "mortar") want = 80
       else want = 70
       let radial = clamp((d - want) / 25, -1, 1)
       const tHp = fightTarget.hp ?? 1400
@@ -728,24 +827,67 @@ export function makeBot(hello: Hello) {
       if (goal && hyp2(x, y, goal[0], goal[1]) < 25) {
         moveYaw = Math.atan2(goal[1] - y, goal[0] - x)
       }
-      // lost line of sight on a mech: go re-acquire it if healthy
       const lv = lastVis.get(fightTarget.id) ?? -99
-      if (target && t - lv > 1.0 && hpFrac > 0.5) {
+      const visNow = t - lv < 0.15
+      // cover while the gun reloads (and nothing else can shoot) or while losing the HP race
+      if (PARAMS.coverFight && target && visNow && d < 200) {
+        const secReady = secW != null && ((secW.kind === "lightning" && d < (secW.stats.range ?? 45) && me.energy > 10) || (secW.kind !== "lightning" && secW.cooldown < 0.3))
+        const reloading = gun != null && ((gun.reload ?? 0) > 0.4 || (gun.ammo ?? 1) === 0)
+        const losing = hpFrac < 0.45 && tHp > me.hp * 1.2
+        if ((reloading && !secReady) || losing) {
+          if (!coverCache || coverCache.id !== fightTarget.id || t - coverCache.t > 0.5) {
+            coverCache = { id: fightTarget.id, t, p: findCover(x, y, z, p[0], p[1], p[2] + 8, 16) }
+          }
+          const cp = coverCache.p
+          if (cp) {
+            mode = losing ? "fallback" : "reload-cover"
+            moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
+            speed = hyp2(x, y, cp[0], cp[1]) < 1.5 ? 0 : 1
+          }
+        }
+      }
+      // lost line of sight on a mech: re-acquire it only when it is nearly dead (or always, in the v1 variant)
+      if (target && t - lv > 1.0 && hpFrac > 0.5 && (PARAMS.chaseAlways || tHp < (fightTarget.max_hp ?? 1400) * 0.35)) {
         navGoal = [p[0], p[1]]
         mode = "chase"
       }
       // keep inside the next circle when strafing
-      if (zone.next_radius > 0 && dNext > zone.next_radius - nextMargin * 0.5 && t > zone.shrink_start - 15) {
+      if (!navGoal && zone.next_radius > 0 && dNext > zone.next_radius - nextMargin * 0.5 && t > zone.shrink_start - 15) {
         const inYaw = Math.atan2(ncy - y, ncx - x)
         if (Math.cos(moveYaw - inYaw) < 0) moveYaw = inYaw + strafeSign * 0.6
       }
-    } else if (hpFrac < 0.6 && t - lastDamageT > 0.5 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15)) {
-      // hold still (silent) and let regen work, facing where the danger came from
+    } else if (ffa && watch && watchD < 200) {
+      // free-for-all: someone we do not want to fight is in view; face it, stay quiet, get out of its sight
+      mode = "hide"
+      aimYaw = Math.atan2(watch.pos[1] - y, watch.pos[0] - x)
+      aimPitch = 0
+      if (!coverCache || coverCache.id !== watch.id || t - coverCache.t > 1.0) {
+        coverCache = { id: watch.id, t, p: findCover(x, y, z, watch.pos[0], watch.pos[1], watch.pos[2] + 8, 20) }
+      }
+      const cp = coverCache.p
+      if (cp && hyp2(x, y, cp[0], cp[1]) > 1.5) {
+        moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
+        speed = 0.42
+      } else speed = 0
+    } else if (PARAMS.healStill && hpFrac < 0.6 && t - lastDamageT > 0.5 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15)) {
+      // v1 healing: hold still (silent), facing where the danger came from
       mode = "heal"
       speed = 0
       if (!bcActive) {
         const base = threatYaw != null && t - threatT < 30 ? threatYaw : zoneYaw
         aimYaw = base + Math.sin(t * 0.7) * 0.7
+        aimPitch = 0
+      }
+    } else if (!PARAMS.healStill && hpFrac < 0.6 && threatYaw != null && t - threatT < 20 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15) &&
+      (coverCache?.id === -2 && t - coverCache.t < 3 ? coverCache.p : (coverCache = { id: -2, t, p: findCover(x, y, z, x + Math.cos(threatYaw) * 70, y + Math.sin(threatYaw) * 70, z + 8, 16) }).p)) {
+      // heal out of sight of where the last threat came from
+      mode = "heal"
+      const cp = coverCache!.p as [number, number]
+      const dc = hyp2(x, y, cp[0], cp[1])
+      moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
+      speed = dc < 1.5 ? 0 : 0.42
+      if (!bcActive) {
+        aimYaw = threatYaw + Math.sin(t * 0.7) * 0.6
         aimPitch = 0
       }
     } else if (goal) {
@@ -758,15 +900,23 @@ export function makeBot(hello: Hello) {
       mode = "roam"
       const nr = zone.next_radius
       if (!wanderGoal || t - wanderT > 25 || hyp2(x, y, wanderGoal[0], wanderGoal[1]) < 6) {
-        const a = rng.next() * TAU
-        const rr = Math.sqrt(rng.next()) * Math.max(0, nr * 0.55)
-        wanderGoal = [ncx + Math.cos(a) * rr, ncy + Math.sin(a) * rr]
+        if (ffa) {
+          // nearest comfortable point inside the next circle: minimal exposure
+          const rIn = Math.max(0, nr * 0.6)
+          wanderGoal = dNext <= rIn ? [x, y] : [ncx + ((x - ncx) / dNext) * rIn, ncy + ((y - ncy) / dNext) * rIn]
+        } else {
+          const a = rng.next() * TAU
+          const rr = Math.sqrt(rng.next()) * Math.max(0, nr * 0.55)
+          wanderGoal = [ncx + Math.cos(a) * rr, ncy + Math.sin(a) * rr]
+        }
         wanderT = t
       }
-      if (finalPhase) wanderGoal = [ncx, ncy]
+      if (finalPhase) wanderGoal = clampToZone([ncx, ncy], zn)
       const dw = hyp2(x, y, wanderGoal[0], wanderGoal[1])
       navGoal = dw < 3 ? null : wanderGoal
-      speed = needNext > 0 ? 1 : dw < 3 ? 0 : 0.42
+      const fast = !ffa && t < PARAMS.roamFastUntil
+      speed = needNext > 0 || fast ? 1 : dw < 3 ? 0 : 0.42
+      if (ffa) mode = "hold"
     }
 
     if (t < dodgeUntil) {
@@ -825,7 +975,7 @@ export function makeBot(hello: Hello) {
     void dt
     void tr
 
-    draw.label(`${mode}${fightTarget ? ` ${fightTarget.id}` : ""} ${navLabel} hp ${Math.round(me.hp)} st ${stuckCount}`)
+    draw.label(`${ffa ? "F " : ""}${mode}${fightTarget ? ` ${fightTarget.id}` : ""} ${navLabel} hp ${Math.round(me.hp)} st ${stuckCount}`)
     return act
   }
 
