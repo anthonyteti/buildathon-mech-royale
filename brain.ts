@@ -59,6 +59,10 @@ export const PARAMS = {
   /** strafe direction flips every flipMin + rand * flipRand seconds */
   /** target score: metres added per HP point of the target (lower HP = preferred) */
   hpWeight: 0.05,
+  /** sidestep incoming gun bullets */
+  dodgeBullets: false,
+  /** charging lasers aimed at us: 0 ignore, 1 duck into cover if any, 2 also jink sideways when there is none */
+  laserDodge: 1,
   flipMin: 0.8,
   flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
@@ -651,7 +655,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         continue
       }
       const cx = rx + vx * tc, cy = ry + vy * tc, cz = rz + vz * tc
-      if (Math.hypot(cx, cy) < myR + 0.8 && Math.abs(cz) < 5.5) {
+      if (P.dodgeBullets && Math.hypot(cx, cy) < myR + 0.8 && Math.abs(cz) < 5.5) {
         const pyaw = Math.atan2(p.vel[1], p.vel[0])
         // sidestep perpendicular, away from the closest-approach side
         const side = Math.sign(-Math.sin(pyaw) * cx + Math.cos(pyaw) * cy) || (rng.next() < 0.5 ? 1 : -1)
@@ -662,7 +666,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     }
     // laser telegraph: duck behind cover if there is any within reach, else jink sideways
     for (const m of obs.mechs) {
-      if (m.kind !== "mech") continue
+      if (m.kind !== "mech" || P.laserDodge === 0) continue
       if (!m.charging) { chargeStart.delete(m.id); continue }
       if (!chargeStart.has(m.id)) chargeStart.set(m.id, t - 0.05)
       const d = hyp2(x, y, m.pos[0], m.pos[1])
@@ -692,7 +696,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         dodgeDir = Math.atan2(bestP[1] - y, bestP[0] - x)
         dodgeBoost = me.energy > 15
         dodgeCover = true
-      } else if (t > dodgeUntil) {
+      } else if (t > dodgeUntil && P.laserDodge >= 2) {
         dodgeUntil = t + 0.5
         dodgeDir = toMe + (rng.next() < 0.5 ? 1 : -1) * Math.PI / 2
         dodgeBoost = false
