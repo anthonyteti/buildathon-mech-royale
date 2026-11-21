@@ -43,9 +43,9 @@ export const PARAMS = {
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
   hunterAim: 0,
   /** practice: from this time on, wait in a sheltered spot inside the next circle instead of roaming (0 = off) */
-  practiceHold: 5,
+  practiceHold: 0,
   /** practice: while holding, go for cubes only this far away */
-  holdCubeRange: 90,
+  holdCubeRange: 35,
   /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
   practiceCalmHp: 0,
   hunterRange: 150,
@@ -120,9 +120,9 @@ export const PARAMS = {
   /** free-for-all: hold on a deep roof spot (no edge within 8 m) inside the next circle instead of a sheltered ground spot */
   ffaRoof: false,
   /** gun lead learned per target: score several lead predictors on each mech's observed track and aim with the best */
-  aimLearn: true,
+  aimLearn: false,
   /** strafe flips always reverse direction (instead of a random new side) */
-  flipAlt: true,
+  flipAlt: false,
   /** also fire the gun when the commanded aim is within one tick of torso slew (the torso turns before the shot leaves) */
   fireSlew: false,
   /** multiplier on the aim error we accept before firing the gun */
@@ -143,8 +143,8 @@ export const PARAMS = {
   roofAfter: 0,
   /** practice: before this time, actively walk to remembered drones to farm cubes (0 = off) */
   farmUntil: 0,
-  flipMin: 0.35,
-  flipRand: 0.4,
+  flipMin: 0.8,
+  flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
   kite: false,
   /** score bonus (metres) for a mech that hurt us in the last 4 s */
