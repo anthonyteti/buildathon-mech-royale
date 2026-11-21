@@ -68,7 +68,7 @@ export const PARAMS = {
   /** per-decision smoothing factor for target velocity used in lead (1 = raw) */
   velSmooth: 1,
   /** adapt gun lead to how often the target changes velocity: acceleration (m/s^2) where lead starts dropping (0 = off) */
-  adaptiveLead: 0,
+  adaptiveLead: 10,
   leadMin: 0.4,
   /** fight movement: irregular jinks across the line of fire (0 = off; value = weight of range keeping) */
   jink: 0,
