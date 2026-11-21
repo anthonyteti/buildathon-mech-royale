@@ -85,12 +85,22 @@ export const PARAMS = {
   jinkRand: 0.4,
   /** random spread (radians) around the perpendicular for each jink */
   jinkSpread: 1.0,
+  /** free-for-all: a mech that hurt us stays engaged for this many seconds */
+  engageMemory: 6,
+  /** free-for-all: with nothing to shoot, keep looking toward the last threat for this many seconds */
+  watchThreat: 4,
+  /** free-for-all: in view of a mech we avoid and with no cover, sidestep at this speed fraction (0 = stand still; 0.42 stays silent) */
+  hideJink: 0,
   /** gun lead learned per target: score several lead predictors on each mech's observed track and aim with the best */
   aimLearn: true,
   /** strafe flips always reverse direction (instead of a random new side) */
   flipAlt: true,
+  /** also fire the gun when the commanded aim is within one tick of torso slew (the torso turns before the shot leaves) */
+  fireSlew: false,
   /** multiplier on the aim error we accept before firing the gun */
   fireTol: 1,
+  /** the same in free-for-all mode */
+  fireTolFfa: 1,
   /** sidestep incoming gun bullets */
   dodgeBullets: false,
   /** charging lasers aimed at us: 0 ignore, 1 duck into cover if any, 2 also jink sideways when there is none */
@@ -761,7 +771,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (ffa || P.selectiveFights) {
         // free-for-all: only take fights that are forced on us or cheap
         const at0 = attackers.get(m.id)
-        const engaged = (at0 != null && t - at0 < 6) || d < (ffa ? P.engageRange : P.practiceEngageRange) || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
+        const engaged = (at0 != null && t - at0 < (ffa ? P.engageMemory : 6)) || d < (ffa ? P.engageRange : P.practiceEngageRange) || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
         if (!engaged) {
           if (d < watchD) { watchD = d; watch = m }
           continue
@@ -954,7 +964,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const vis = map.los(x, y, mz, center[0], center[1], center[2])
       const e = aimErr(aimYaw, aimPitch, d)
       const rad = targetRadius(fightTarget)
-      const tol = (rad * 0.9 + 0.5) * P.fireTol
+      const tol = (rad * 0.9 + 0.5) * (ffa ? P.fireTolFfa : P.fireTol)
       const gunRange = gun?.stats.range ?? W.gun.range
       const tSpeed = Math.hypot(fightTarget.vel[0], fightTarget.vel[1])
       const longShotOk = !ffa || d < 170 || tSpeed < 4
@@ -962,7 +972,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         const k = !vis ? "novis" : (gun.reload ?? 0) > 0 || (gun.ammo ?? 1) <= 0 ? "reload" : (gun.cooldown ?? 0) > 0.1 ? "cool" : !longShotOk ? "long" : e.lin >= tol + d * 0.004 ? "aim" : "fire"
         const g = globalThis as any; g.fs = g.fs ?? {}; g.fs[k] = (g.fs[k] ?? 0) + 1
       }
-      if (gun && gunSlot >= 0 && vis && longShotOk && d < gunRange * 0.97 && e.lin < tol + d * 0.004 && (gun.ammo ?? 1) > 0 && (gun.reload ?? 0) <= 0) {
+      const aimOk = e.lin < tol + d * 0.004 || (P.fireSlew && e.ey < tr * 0.05 * 0.9 && e.ep < (st.pitch_rate ?? 3) * 0.05 * 0.9)
+      if (gun && gunSlot >= 0 && vis && longShotOk && d < gunRange * 0.97 && aimOk && (gun.ammo ?? 1) > 0 && (gun.reload ?? 0) <= 0) {
         if (gunSlot === 0) fire0 = true
         else fire1 = true
       }
@@ -1142,7 +1153,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         if (!goal && bd > 25) { goal = [bc.pos[0], bc.pos[1]]; goalReason = "crate"; goalSpeed = 0.8 }
       } else {
         // scan / face threats
-        if (threatYaw != null && t - threatT < 4) {
+        if (threatYaw != null && t - threatT < (ffa ? P.watchThreat : 4)) {
           aimYaw = threatYaw
         } else {
           const base = goal ? Math.atan2(goal[1] - y, goal[0] - x) : zoneYaw
@@ -1288,6 +1299,11 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (cp && hyp2(x, y, cp[0], cp[1]) > 1.5) {
         moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
         speed = 0.42
+      } else if (!cp && P.hideJink > 0) {
+        // no cover from it: sidestep quietly across its line of fire instead of standing still
+        if (t > strafeFlipT) { strafeSign = -strafeSign; strafeFlipT = t + P.flipMin + rng.next() * P.flipRand }
+        moveYaw = aimYaw + strafeSign * Math.PI / 2
+        speed = P.hideJink
       } else speed = 0
     } else if (P.healStill && hpFrac < 0.6 && t - lastDamageT > 0.5 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15)) {
       // v1 healing: hold still (silent), facing where the danger came from

@@ -771,7 +771,7 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
         drops.push({ id: 20000 + drops.length, pos: p, landsAt: t + cfg.drops.fall_s, progress: 0, holder: null, taken: false, calledAt: t })
       }
     }
-    if (process.env.TRAJLOG && tick % decideEvery === 0) for (const m of mechs) if (m.alive && m.id < 2) { const q: any = m; (q.traj ??= []).push([Math.round(t * 100) / 100, +m.pos[0].toFixed(2), +m.pos[1].toFixed(2), +m.vel[0].toFixed(2), +m.vel[1].toFixed(2)]) }
+    if (process.env.TRAJLOG && tick % decideEvery === 0) for (const m of mechs) if (m.alive && m.id < 2) { const q: any = m; const g = m.weapons.find((w) => w?.kind === "gun"); const o = mechs[1 - m.id]; (q.traj ??= []).push([Math.round(t * 100) / 100, +m.pos[0].toFixed(2), +m.pos[1].toFixed(2), +m.vel[0].toFixed(2), +m.vel[1].toFixed(2), g ? g.ammo : -1, g ? +g.reload.toFixed(2) : -1, q.shots ?? 0, o && o.alive ? (los(muzzleOf(m), centerOf(o)) ? 1 : 0) : -1, +m.hp.toFixed(0), String((m.action as any)?.label ?? "").replace(/^F /, "").split(" ")[0]]) }
     if (tick % decideEvery === 0) {
       const hunters = practice ? houseHunters() : new Set<number>()
       const extActs = new Map<number, Promise<any>>()
