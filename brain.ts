@@ -45,12 +45,12 @@ export const PARAMS = {
   /** play the free-for-all policy from t=0 in every match */
   ffaStart: false,
   /** stricter free-for-all detector (fewer false triggers in practice) */
-  strictDetect: false,
+  strictDetect: true,
   /** with strictDetect: deaths of other mechs (not by us) that switch to the free-for-all policy before 120 s / before 200 s / at any time, and the mech-vs-mech fire evidence needed */
-  ffaDead1: 3,
-  ffaDead2: 4,
-  ffaDead3: 6,
-  ffaInfight: 3,
+  ffaDead1: 4,
+  ffaDead2: 5,
+  ffaDead3: 7,
+  ffaInfight: 4,
   /** preferred distance when we only have the gun */
   gunRange: 70,
   /** sideways component while strafing in a fight (0..1) */
@@ -86,9 +86,9 @@ export const PARAMS = {
   /** random spread (radians) around the perpendicular for each jink */
   jinkSpread: 1.0,
   /** gun lead learned per target: score several lead predictors on each mech's observed track and aim with the best */
-  aimLearn: false,
+  aimLearn: true,
   /** strafe flips always reverse direction (instead of a random new side) */
-  flipAlt: false,
+  flipAlt: true,
   /** multiplier on the aim error we accept before firing the gun */
   fireTol: 1,
   /** sidestep incoming gun bullets */
@@ -105,8 +105,8 @@ export const PARAMS = {
   roofAfter: 0,
   /** practice: before this time, actively walk to remembered drones to farm cubes (0 = off) */
   farmUntil: 0,
-  flipMin: 0.8,
-  flipRand: 1.4,
+  flipMin: 0.35,
+  flipRand: 0.4,
   /** when two or more mechs are on us, back off to a longer range */
   kite: false,
   /** score bonus (metres) for a mech that hurt us in the last 4 s */
