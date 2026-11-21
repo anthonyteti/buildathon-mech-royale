@@ -58,8 +58,8 @@ export const PARAMS = {
   /** preferred distance when we only have the gun */
   gunRange: 70,
   /** practice only: preferred distance with only the gun / with a laser (0 = same as gunRange / laserRange) */
-  practiceGunRange: 0,
-  practiceLaserRange: 0,
+  practiceGunRange: 140,
+  practiceLaserRange: 130,
   /** sideways component while strafing in a fight (0..1) */
   strafe: 0.9,
   /** ignore mechs farther than this unless they are shooting at us */
