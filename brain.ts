@@ -63,6 +63,10 @@ export const PARAMS = {
   dodgeBullets: false,
   /** charging lasers aimed at us: 0 ignore, 1 duck into cover if any, 2 also jink sideways when there is none */
   laserDodge: 1,
+  /** step out of a mortar shell's landing zone */
+  dodgeMortar: true,
+  /** below 60% HP with no target, move out of sight of the last threat */
+  healCover: true,
   flipMin: 0.8,
   flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
@@ -647,7 +651,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         const tl = (-b - Math.sqrt(disc)) / (2 * a)
         if (tl < 0 || tl > 3) continue
         const lx = p.pos[0] + p.vel[0] * tl, ly = p.pos[1] + p.vel[1] * tl
-        if (hyp2(x, y, lx, ly) < (W.mortar.splash_radius ?? 7) + 3) {
+        if (P.dodgeMortar && hyp2(x, y, lx, ly) < (W.mortar.splash_radius ?? 7) + 3) {
           dodgeUntil = t + 0.6
           dodgeDir = Math.atan2(y - ly, x - lx)
           dodgeBoost = me.energy > 20
@@ -1076,7 +1080,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         aimYaw = base + Math.sin(t * 0.7) * 0.7
         aimPitch = 0
       }
-    } else if (!P.healStill && hpFrac < 0.6 && t - lastDamageT > P.healCalm && threatYaw != null && t - threatT < 20 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15) &&
+    } else if (P.healCover && !P.healStill && hpFrac < 0.6 && t - lastDamageT > P.healCalm && threatYaw != null && t - threatT < 20 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15) &&
       (coverCache?.id === -2 && t - coverCache.t < 3 ? coverCache.p : (coverCache = { id: -2, t, p: findCover(x, y, z, x + Math.cos(threatYaw) * 70, y + Math.sin(threatYaw) * 70, z + 8, 16) }).p)) {
       // heal out of sight of where the last threat came from
       mode = "heal"
