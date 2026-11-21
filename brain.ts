@@ -41,9 +41,9 @@ export const PARAMS = {
   /** with selective fights in practice: fight any visible mech within this distance */
   practiceEngageRange: 60,
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
-  hunterAim: 0.25,
-  hunterRange: 200,
-  hunterClose: 45,
+  hunterAim: 0,
+  hunterRange: 150,
+  hunterClose: 30,
   /** allow switching to the free-for-all survival policy */
   ffaMode: true,
   /** play the free-for-all policy from t=0 in every match */
@@ -57,6 +57,9 @@ export const PARAMS = {
   ffaInfight: 4,
   /** preferred distance when we only have the gun */
   gunRange: 70,
+  /** practice only: preferred distance with only the gun / with a laser (0 = same as gunRange / laserRange) */
+  practiceGunRange: 0,
+  practiceLaserRange: 0,
   /** sideways component while strafing in a fight (0..1) */
   strafe: 0.9,
   /** ignore mechs farther than this unless they are shooting at us */
@@ -1226,9 +1229,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (secW?.kind === "lightning" && me.energy > 20) want = P.lightningRange
       else if (fightTarget.kind === "npc") want = 40
       else if (tw.includes("lightning")) want = 80
-      else if (secW?.kind === "laser") want = P.laserRange
+      else if (secW?.kind === "laser") want = !ffa && P.practiceLaserRange > 0 ? P.practiceLaserRange : P.laserRange
       else if (secW?.kind === "mortar") want = 80
-      else want = P.gunRange
+      else want = !ffa && P.practiceGunRange > 0 ? P.practiceGunRange : P.gunRange
       if (P.kite && threats >= 2 && !(secW?.kind === "lightning" && me.energy > 20)) want = Math.max(want, 100)
       let radial = clamp((d - want) / 25, -1, 1)
       const tHp = fightTarget.hp ?? 1400
