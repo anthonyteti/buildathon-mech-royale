@@ -763,8 +763,8 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
           try { a = m.ctrl.act(obs) } catch (e) { if (opt.verbose) console.error(e); a = { move: m.action.move, aim: m.action.aim } }
           timing.push(performance.now() - t0)
           a.label = (draw.take() as any)?.label
-          if (process.env.SIMTRACE && tick % 10 === 0) {
-            const en = mechs.filter((v) => v.alive && v.id !== m.id && v.ctrl.kind === "house").map((v) => ({ v, d: hyp(m.pos[0], m.pos[1], v.pos[0], v.pos[1]) })).filter((q) => q.d < 200).sort((p, q) => p.d - q.d).slice(0, 3)
+          if (process.env.SIMTRACE && tick % 10 === 0 && (!process.env.TRACE_ID || String(m.id) === process.env.TRACE_ID)) {
+            const en = mechs.filter((v) => v.alive && v.id !== m.id).map((v) => ({ v, d: hyp(m.pos[0], m.pos[1], v.pos[0], v.pos[1]) })).filter((q) => q.d < 200).sort((p, q) => p.d - q.d).slice(0, 3)
             const dmg = (obs.events as any[]).filter((e) => e.type === "damaged").map((e) => `${e.weapon}${Math.round(e.amount)}${e.rear ? "R" : ""}`).join(",")
             console.error(`t=${t.toFixed(1)} hp=${Math.round(m.hp)} en=${Math.round(m.energy)} w=${m.weapons.map((w) => w ? w.kind[0] + (w.kind === "gun" ? w.ammo : "") : "-").join("")} ${a.label} | ${en.map((q) => `${q.v.id}:${Math.round(q.d)}m${seesMech(m, q.v) ? "V" : ""}${(q.v.ctrl as any).tier}${q.v.weapons.map((w) => w ? w.kind[0] : "").join("")}`).join(" ")} | ${dmg}`)
           }
