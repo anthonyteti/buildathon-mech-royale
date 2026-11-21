@@ -45,7 +45,7 @@ export const PARAMS = {
   /** sideways component while strafing in a fight (0..1) */
   strafe: 0.9,
   /** ignore mechs farther than this unless they are shooting at us */
-  maxEngage: 150,
+  maxEngage: 200,
   /** shoot back at a drone that is hitting us before poking distant mechs */
   npcThreat: true,
   /** mechs closer than this keep priority over a drone that is hitting us (unless below 40% HP) */
