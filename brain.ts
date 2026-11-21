@@ -76,7 +76,7 @@ export const PARAMS = {
   /** practice: after this time, wait on a roof near the next circle instead of roaming (0 = off) */
   roofAfter: 0,
   /** practice: before this time, actively walk to remembered drones to farm cubes (0 = off) */
-  farmUntil: 150,
+  farmUntil: 0,
   flipMin: 0.8,
   flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
