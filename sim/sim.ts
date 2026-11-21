@@ -930,7 +930,7 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
   const surv = mechs.filter((m) => m.alive).sort((a, b) => b.hp - a.hp)
   surv.forEach((m, i) => { m.place = i + 1; m.deathT = t })
   // dead-early end (our bots all dead): remaining house bots outlive us; places already set for the dead
-  const results: MechResult[] = mechs.map((m) => ({ id: m.id, label: m.ctrl.label, place: m.place, kills: m.kills, deathT: Math.round(m.deathT * 10) / 10, cubes: m.cubes, hp: Math.round(m.hp), cause: (m as any).cause ?? (m.alive ? "alive" : "?"), shots: (m as any).shots ?? 0, hits: (m as any).hits ?? 0, drops: (m as any).drops ?? 0, dealt: Math.round((m as any).dealt ?? 0), taken: Math.round((m as any).taken ?? 0) }))
+  const results: MechResult[] = mechs.map((m) => ({ id: m.id, label: m.ctrl.label, place: m.place, kills: m.kills, deathT: Math.round(m.deathT * 10) / 10, cubes: m.cubes, hp: Math.round(m.hp), cause: (m as any).cause ?? (m.alive ? "alive" : "?"), shots: (m as any).shots ?? 0, hits: (m as any).hits ?? 0, loadout: m.weapons.filter((w) => w).map((w) => w!.kind).join("+"), drops: (m as any).drops ?? 0, dealt: Math.round((m as any).dealt ?? 0), taken: Math.round((m as any).taken ?? 0) }))
   if (opt.verbose) {
     timing.sort((a, b) => a - b)
     console.error(`match t=${t.toFixed(1)} act p50 ${timing[timing.length >> 1]?.toFixed(2)} p99 ${timing[Math.floor(timing.length * 0.99)]?.toFixed(2)} max ${timing[timing.length - 1]?.toFixed(2)}`)

@@ -56,6 +56,18 @@ export const PARAMS = {
   faceAttacker: false,
   /** do not start healing until this long after the last hit */
   healCalm: 0,
+  /** in a fight with other mechs around, move to a nearby spot that keeps the target in sight but hides us from the others */
+  fightPos: false,
+  /** after a fight, sit in a sheltered spot until HP is back above this fraction (0 = off) */
+  healTo: 0,
+  /** second-weapon preference, best first */
+  weaponOrder: "laser,lightning,mortar",
+  /** with a laser in hand, open fights out to this range */
+  laserEngage: 150,
+  /** preferred distance with a laser in hand */
+  laserRange: 90,
+  /** preferred distance with lightning in hand */
+  lightningRange: 28,
 }
 
 const WEAPON_PRIO: Record<string, number> = { lightning: 3, laser: 2, mortar: 1, gun: 0 }
@@ -78,6 +90,8 @@ const sharedMaps = new Map<string, { map: GameMap; nav: NavGrid | null }>()
 
 export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   const P = { ...PARAMS, ...overrides }
+  const wprio: Record<string, number> = { gun: 0 }
+  P.weaponOrder.split(",").forEach((k, i, arr) => { wprio[k] = arr.length - i })
   const cfg = hello.config
   const mapKey = hello.map.dir + "|" + hello.map.files.join(",")
   let shared = sharedMaps.get(mapKey)
@@ -121,6 +135,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let dodgeDir = 0
   let stuckCount = 0
   let lastHitBy = -1
+  let fightSpot: { t: number; p: [number, number] | null; id: number } | null = null
+  let healSpot: [number, number] | null = null
+  const recentMechs = new Map<number, { pos: [number, number, number]; t: number }>()
   let lastHitBearing = 0
   let lastHitT = -99
   /** weapons seen on the ground (they never despawn; forgotten once we see the spot empty) */
@@ -505,6 +522,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       }
     }
 
+    for (const m of obs.mechs) if (m.kind === "mech") recentMechs.set(m.id, { pos: [m.pos[0], m.pos[1], m.pos[2]], t })
+    for (const [id, r] of recentMechs) if (t - r.t > 3) recentMechs.delete(id)
+
     // --- zone ---
     const zn = zoneNow(obs)
     const zone = obs.zone
@@ -553,7 +573,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         }
       }
       const atk = attackers.get(m.id)
-      if (d > P.maxEngage && !(atk != null && t - atk < 6)) continue
+      const engageMax = weapons.some((w) => w?.kind === "laser") ? Math.max(P.maxEngage, P.laserEngage) : P.maxEngage
+      if (d > engageMax && !(atk != null && t - atk < 6)) continue
       let sc = d + (m.hp ?? 1400) / 20 + (vis ? 0 : 120)
       if (m.id === lastTargetId) sc -= 25
       if (m.charging) sc -= 20
@@ -798,7 +819,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (kind === "gun") return false
       if (weapons.some((w) => w?.kind === kind)) return false
       if (!secW) return true
-      return (WEAPON_PRIO[kind] ?? 0) > (WEAPON_PRIO[secW.kind] ?? 0)
+      return (wprio[kind] ?? 0) > (wprio[secW.kind] ?? 0)
     }
     // remember pickups; forget ones whose spot we can see empty
     const visPick = new Set<number>()
@@ -841,7 +862,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         }
       }
       for (const c of obs.cubes) consider(c.id, c.pos[0], c.pos[1], c.pos[2], target ? 25 : 90, 30, "cube")
-      const kindBias: Record<string, number> = { lightning: 40, laser: 15, mortar: 0 }
+      const kindBias: Record<string, number> = {}
+      for (const k of ["lightning", "laser", "mortar"]) kindBias[k] = wprio[k] === 3 ? 40 : wprio[k] === 2 ? 15 : 0
       for (const [id, kp] of knownPickups) {
         if (!wantWeapon(kp.kind)) continue
         const maxD = target ? 20 : !secW ? (t < 200 ? 200 : 110) : kp.kind === "lightning" ? 120 : 60
@@ -932,10 +954,10 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       }
       const tw = fightTarget.weapons ?? []
       let want: number
-      if (secW?.kind === "lightning" && me.energy > 20) want = 28
+      if (secW?.kind === "lightning" && me.energy > 20) want = P.lightningRange
       else if (fightTarget.kind === "npc") want = 40
       else if (tw.includes("lightning")) want = 80
-      else if (secW?.kind === "laser") want = 90
+      else if (secW?.kind === "laser") want = P.laserRange
       else if (secW?.kind === "mortar") want = 80
       else want = P.gunRange
       if (P.kite && threats >= 2 && !(secW?.kind === "lightning" && me.energy > 20)) want = Math.max(want, 100)
@@ -952,6 +974,38 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       }
       const lv = lastVis.get(fightTarget.id) ?? -99
       const visNow = t - lv < 0.15
+      // exposure control: keep the target in sight while hiding from the other mechs around us
+      if (P.fightPos && target && recentMechs.size >= 2) {
+        if (!fightSpot || fightSpot.id !== target.id || t - fightSpot.t > 0.5) {
+          const others = [...recentMechs].filter(([id]) => id !== target!.id).map(([, r]) => r.pos)
+          const tp = target.pos
+          const tc: [number, number, number] = [tp[0], tp[1], tp[2] + targetHeight(target)]
+          const exposure = (px: number, py: number, pz: number) => {
+            let n = 0
+            for (const o of others) if (map.los(o[0], o[1], o[2] + 8, px, py, pz + 4.5)) n++
+            return n
+          }
+          let best: [number, number] | null = null
+          let bestSc = -exposure(x, y, z) * 1.0 + (map.los(x, y, z + 8, tc[0], tc[1], tc[2]) ? 0 : -1.5)
+          for (const r of [4, 8, 12]) {
+            for (let k = 0; k < 12; k++) {
+              const a = (k * Math.PI) / 6
+              const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r
+              const pz = map.topAt(px, py)
+              if (pz > z + stepUp || pz < z - 5 || !lineClear(x, y, z, px, py)) continue
+              const sees = map.los(px, py, pz + 8, tc[0], tc[1], tc[2])
+              const sc = -exposure(px, py, pz) * 1.0 + (sees ? 0 : -1.5) - r / 40
+              if (sc > bestSc + 0.2) { bestSc = sc; best = [px, py] }
+            }
+          }
+          fightSpot = { t, p: best, id: target.id }
+        }
+        if (fightSpot.p && hyp2(x, y, fightSpot.p[0], fightSpot.p[1]) > 1.5) {
+          moveYaw = Math.atan2(fightSpot.p[1] - y, fightSpot.p[0] - x)
+          speed = 1
+          mode = "reposition"
+        }
+      }
       // cover while the gun reloads (and nothing else can shoot) or while losing the HP race
       if (P.coverFight && target && visNow && d < 200) {
         const secReady = secW != null && ((secW.kind === "lightning" && d < (secW.stats.range ?? 45) && me.energy > 10) || (secW.kind !== "lightning" && secW.cooldown < 0.3))
@@ -1013,7 +1067,22 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         aimYaw = threatYaw + Math.sin(t * 0.7) * 0.6
         aimPitch = 0
       }
+    } else if (P.healTo > 0 && hpFrac < P.healTo && !(goal && hyp2(x, y, goal[0], goal[1]) < 15) && t - lastDamageT > 1) {
+      // rest in a sheltered spot nearby until healed; standing still is silent
+      mode = "rest"
+      if (!healSpot || hyp2(healSpot[0], healSpot[1], ncx, ncy) > Math.max(10, zone.next_radius * 0.8)) {
+        const rIn = zone.next_radius > 0 ? Math.max(5, zone.next_radius * 0.75) : 5
+        healSpot = pickHold(x, y, 25, ncx, ncy, Math.max(rIn, dNext), z)
+      }
+      const dh = hyp2(x, y, healSpot[0], healSpot[1])
+      if (dh > 2) { navGoal = healSpot; speed = 0.42 } else speed = 0
+      if (!bcActive) {
+        const base = threatYaw != null && t - threatT < 30 ? threatYaw : zoneYaw
+        aimYaw = base + Math.sin(t * 0.6) * 1.0
+        aimPitch = 0
+      }
     } else if (goal) {
+      healSpot = null
       mode = goalReason
       navGoal = goal
       speed = goalSpeed
