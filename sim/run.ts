@@ -85,6 +85,7 @@ const add = (label: string, r: any) => {
   if (!agg.has(label)) agg.set(label, { score: [], kills: [], death: [], cubes: [], causes: new Map(), shots: 0, hits: 0, dealt: [], taken: [], drops: 0 })
   const a = agg.get(label)!
   for (const [k, v] of Object.entries(r.takenBy ?? {})) (a as any).tb = { ...((a as any).tb ?? {}), [k]: (((a as any).tb ?? {})[k] ?? 0) + (v as number) }
+  ;(a as any).lo = (a as any).lo ?? {}; (a as any).lo[r.loadout ?? "?"] = ((a as any).lo[r.loadout ?? "?"] ?? 0) + 1
   a.drops += r.drops ?? 0; a.shots += r.shots ?? 0; a.hits += r.hits ?? 0; a.dealt.push(r.dealt ?? 0); a.taken.push(r.taken ?? 0)
   a.score.push(16 - r.place); a.kills.push(r.kills); a.death.push(r.deathT); a.cubes.push(r.cubes)
   const c = String(r.cause).replace(/:.*/, "")
@@ -103,7 +104,7 @@ const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / Math.max(1, a.lengt
 const se = (a: number[]) => { const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / Math.max(1, a.length - 1) / Math.max(1, a.length)) }
 console.log(`${mode}: ${n} matches in ${((Date.now() - t0) / 1000).toFixed(0)} s${failed ? `, ${failed} failed` : ""}`)
 for (const [label, a] of agg) {
-  console.log(`  ${label.padEnd(6)} score ${mean(a.score).toFixed(2)} ± ${se(a.score).toFixed(2)}  kills ${mean(a.kills).toFixed(2)}  death t ${mean(a.death).toFixed(0)}  cubes ${mean(a.cubes).toFixed(1)}  gun hit ${(a.hits / Math.max(1, a.shots) * 100).toFixed(0)}% dealt ${mean(a.dealt).toFixed(0)} taken ${mean(a.taken).toFixed(0)} drops ${(a.drops / Math.max(1, a.score.length)).toFixed(2)} takenBy ${Object.entries((a as any).tb ?? {}).map(([k, v]) => `${k}:${Math.round((v as number) / a.score.length)}`).join(",")}  causes ${[...a.causes].map(([k, v]) => `${k}:${v}`).join(" ")}`)
+  console.log(`  ${label.padEnd(6)} score ${mean(a.score).toFixed(2)} ± ${se(a.score).toFixed(2)}  kills ${mean(a.kills).toFixed(2)}  death t ${mean(a.death).toFixed(0)}  cubes ${mean(a.cubes).toFixed(1)}  gun hit ${(a.hits / Math.max(1, a.shots) * 100).toFixed(0)}% dealt ${mean(a.dealt).toFixed(0)} taken ${mean(a.taken).toFixed(0)} drops ${(a.drops / Math.max(1, a.score.length)).toFixed(2)} takenBy ${Object.entries((a as any).tb ?? {}).map(([k, v]) => `${k}:${Math.round((v as number) / a.score.length)}`).join(",")}  loadouts ${Object.entries((a as any).lo ?? {}).map(([k, v]) => `${k}:${v}`).join(",")}  causes ${[...a.causes].map(([k, v]) => `${k}:${v}`).join(" ")}`)
 }
 if (mode === "practice" && B) {
   // paired difference on the same seeds
