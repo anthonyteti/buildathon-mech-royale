@@ -31,11 +31,11 @@ export const PARAMS = {
   /** v1 healing: stand still in place when below 60% HP; otherwise heal from cover if we can find it */
   healStill: false,
   /** practice: roam at full speed (looking for drones, crates, cubes) until this time */
-  roamFastUntil: 150,
+  roamFastUntil: 0,
   /** duck into cover while the gun reloads or when losing the HP race */
   coverFight: true,
   /** practice too: only fight mechs that attack us, come close, or are nearly dead (never poke idle house bots) */
-  selectiveFights: true,
+  selectiveFights: false,
   /** distance under which any visible mech is fought when fights are selective */
   engageRange: 55,
   /** with selective fights in practice: fight any visible mech within this distance */
