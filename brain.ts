@@ -63,6 +63,10 @@ export const PARAMS = {
   /** strafe direction flips every flipMin + rand * flipRand seconds */
   /** target score: metres added per HP point of the target (lower HP = preferred) */
   hpWeight: 0.05,
+  /** fraction of the target's velocity used for gun lead */
+  leadScale: 1,
+  /** multiplier on the aim error we accept before firing the gun */
+  fireTol: 1,
   /** sidestep incoming gun bullets */
   dodgeBullets: false,
   /** charging lasers aimed at us: 0 ignore, 1 duck into cover if any, 2 also jink sideways when there is none */
@@ -790,6 +794,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const d = hyp2(x, y, p[0], p[1])
       const center: V3 = [p[0], p[1], p[2] + h]
       const vel: V3 = [fightTarget.vel[0], fightTarget.vel[1], Math.abs(fightTarget.vel[2]) > 1.5 ? fightTarget.vel[2] * 0.5 : 0]
+      // lead damping: strafing targets reverse often, so trust only part of their current velocity
+      vel[0] *= P.leadScale; vel[1] *= P.leadScale
       const gspeed = gun?.stats.speed ?? W.gun.speed
       const ap = lead(x + Math.cos(me.aim[0]) * 3, y + Math.sin(me.aim[0]) * 3, mz, center, vel, gspeed, 0.06)
       aimYaw = Math.atan2(ap[1] - y, ap[0] - x)
@@ -797,7 +803,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const vis = map.los(x, y, mz, center[0], center[1], center[2])
       const e = aimErr(aimYaw, aimPitch, d)
       const rad = targetRadius(fightTarget)
-      const tol = rad * 0.9 + 0.5
+      const tol = (rad * 0.9 + 0.5) * P.fireTol
       const gunRange = gun?.stats.range ?? W.gun.range
       const tSpeed = Math.hypot(fightTarget.vel[0], fightTarget.vel[1])
       const longShotOk = !ffa || d < 170 || tSpeed < 4
