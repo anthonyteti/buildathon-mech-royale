@@ -40,6 +40,10 @@ export const PARAMS = {
   engageRange: 55,
   /** with selective fights in practice: fight any visible mech within this distance */
   practiceEngageRange: 60,
+  /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
+  hunterAim: 0,
+  hunterRange: 150,
+  hunterClose: 30,
   /** allow switching to the free-for-all survival policy */
   ffaMode: true,
   /** play the free-for-all policy from t=0 in every match */
@@ -91,6 +95,21 @@ export const PARAMS = {
   watchThreat: 4,
   /** free-for-all: in view of a mech we avoid and with no cover, sidestep at this speed fraction (0 = stand still; 0.42 stays silent) */
   hideJink: 0,
+  /** free-for-all: target score metres per HP point (focus the weakest) */
+  hpWeightFfa: 0.05,
+  /** free-for-all: fight any visible mech below this HP fraction within weakRange */
+  weakFrac: 0.4,
+  weakRange: 150,
+  /** free-for-all: also fight a mech that others damaged in the last 4 s, below thirdPartyFrac HP, within weakRange (0 = off) */
+  thirdPartyFrac: 0,
+  /** free-for-all: with two or more mechs hitting us, fight from a spot hidden from the others */
+  multiCover: false,
+  /** apply multiCover / multiRetreat in practice too */
+  multiPractice: false,
+  /** free-for-all: with two or more mechs hitting us and HP below this fraction, break off to cover (0 = off) */
+  multiRetreat: 0,
+  /** free-for-all: hold on a deep roof spot (no edge within 8 m) inside the next circle instead of a sheltered ground spot */
+  ffaRoof: false,
   /** gun lead learned per target: score several lead predictors on each mech's observed track and aim with the best */
   aimLearn: true,
   /** strafe flips always reverse direction (instead of a random new side) */
@@ -221,6 +240,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   // practice (house squad hunting us) vs free-for-all detection
   let ffa = P.ffaStart
   const lastHitOn = new Map<number, number>()
+  const hurtByOther = new Map<number, number>() // mech id -> last time it lost HP to someone else
   let ourKills = 0
   let infight = 0
   const lastHp = new Map<number, number>()
@@ -323,7 +343,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   }
 
   /** A flat roof spot 8-30 m up, near an edge, inside the circle, close to (nx,ny); null if none. */
-  function pickRoof(nx: number, ny: number, rad: number, cx: number, cy: number, rIn: number): [number, number] | null {
+  function pickRoof(nx: number, ny: number, rad: number, cx: number, cy: number, rIn: number, deep = false): [number, number] | null {
     let best: [number, number] | null = null, bestSc = -Infinity
     for (let k = 0; k < 120; k++) {
       const a = rng.next() * TAU, r = Math.sqrt(rng.next()) * rad
@@ -338,7 +358,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         if (Math.abs(h3 - pz) > 1) flat = false
         if (map.topAt(px + ax * 8, py + ay * 8) < pz - 4) edges++
       }
-      if (!flat || edges === 0 || edges > 4) continue
+      if (!flat || (deep ? edges > 0 : edges === 0 || edges > 4)) continue
       const sc = -r / 60 - Math.abs(edges - 2) * 0.2
       if (sc > bestSc) { bestSc = sc; best = [px, py] }
     }
@@ -670,6 +690,11 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         if (process.env.FFA_DEBUG) console.error(`ffa t=${t} dead=${othersDead} kills=${ourKills} alive=${obs.alive} infight=${infight}`)
       }
     }
+    for (const m of obs.mechs) {
+      if (m.kind !== "mech" || m.hp == null) continue
+      const prev = lastHp.get(m.id)
+      if (prev != null && m.hp < prev - 30 && !hitNow.has(m.id)) hurtByOther.set(m.id, t)
+    }
     for (const m of obs.mechs) if (m.kind === "mech" && m.hp != null) lastHp.set(m.id, m.hp)
     for (const s of obs.sounds) {
       if ((s.kind === "gun" || s.kind === "laser" || s.kind === "laser_charge" || s.kind === "lightning" || s.kind === "mortar" || s.kind === "step" || s.kind === "boost" || s.kind === "jet") && s.dist !== "far") {
@@ -771,7 +796,11 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (ffa || P.selectiveFights) {
         // free-for-all: only take fights that are forced on us or cheap
         const at0 = attackers.get(m.id)
-        const engaged = (at0 != null && t - at0 < (ffa ? P.engageMemory : 6)) || d < (ffa ? P.engageRange : P.practiceEngageRange) || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
+        const hpF = (m.hp ?? 1400) / (m.max_hp ?? 1400)
+        const aimedAtUs = Math.abs(wrap(m.aim[0] - Math.atan2(y - m.pos[1], x - m.pos[0]))) < P.hunterAim
+        const nearRule = !ffa && P.hunterAim > 0 ? d < P.hunterClose || (aimedAtUs && d < P.hunterRange) : d < (ffa ? P.engageRange : P.practiceEngageRange)
+        const engaged = (at0 != null && t - at0 < (ffa ? P.engageMemory : 6)) || nearRule || (ffa ? hpF < P.weakFrac && d < P.weakRange : hpF < 0.4 && d < 150) || m.id === lastTargetId ||
+          (ffa && P.thirdPartyFrac > 0 && hpF < P.thirdPartyFrac && d < P.weakRange && t - (hurtByOther.get(m.id) ?? -99) < 4)
         if (!engaged) {
           if (d < watchD) { watchD = d; watch = m }
           continue
@@ -780,7 +809,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const atk = attackers.get(m.id)
       const engageMax = weapons.some((w) => w?.kind === "laser") ? Math.max(P.maxEngage, P.laserEngage) : P.maxEngage
       if (d > engageMax && !(atk != null && t - atk < 6)) continue
-      let sc = d + (m.hp ?? 1400) * P.hpWeight + (vis ? 0 : 120)
+      let sc = d + (m.hp ?? 1400) * (ffa ? P.hpWeightFfa : P.hpWeight) + (vis ? 0 : 120)
       if (m.id === lastTargetId) sc -= 25
       if (m.charging) sc -= 20
       const at = attackers.get(m.id)
@@ -1229,7 +1258,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const lv = lastVis.get(fightTarget.id) ?? -99
       const visNow = t - lv < 0.15
       // exposure control: keep the target in sight while hiding from the other mechs around us
-      if (P.fightPos && target && recentMechs.size >= 2) {
+      let nAtk = 0
+      for (const [id, at] of attackers) if (id < 100 && t - at < 3) nAtk++
+      if ((P.fightPos || ((ffa || P.multiPractice) && P.multiCover && nAtk >= 2)) && target && recentMechs.size >= 2) {
         if (!fightSpot || fightSpot.id !== target.id || t - fightSpot.t > 0.5) {
           const others = [...recentMechs].filter(([id]) => id !== target!.id).map(([, r]) => r.pos)
           const tp = target.pos
@@ -1274,6 +1305,27 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
             mode = losing ? "fallback" : "reload-cover"
             moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
             speed = hyp2(x, y, cp[0], cp[1]) < 1.5 ? 0 : 1
+          }
+        }
+      }
+      // two or more mechs on us and hurt: break off to cover from the nearest other attacker, keep shooting if we can
+      if ((ffa || P.multiPractice) && P.multiRetreat > 0 && nAtk >= 2 && hpFrac < P.multiRetreat) {
+        let oth: [number, number, number] | null = null, od = Infinity
+        for (const [id, at] of attackers) {
+          if (id >= 100 || t - at >= 3) continue
+          const r = recentMechs.get(id)
+          if (!r) continue
+          const dd = hyp2(x, y, r.pos[0], r.pos[1])
+          if (dd < od && (!target || id !== target.id || attackers.size === 1)) { od = dd; oth = r.pos }
+        }
+        if (oth) {
+          if (!coverCache || coverCache.id !== -3 || t - coverCache.t > 0.5) coverCache = { id: -3, t, p: findCover(x, y, z, oth[0], oth[1], oth[2] + 8, 20) }
+          const cp = coverCache.p
+          if (cp) {
+            mode = "escape"
+            moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
+            speed = hyp2(x, y, cp[0], cp[1]) < 1.5 ? 0 : 1
+            if (me.energy > 30 && me.grounded && speed > 0) boost = true
           }
         }
       }
@@ -1361,6 +1413,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
           const rIn = Math.max(0, nr * 0.6)
           const near: [number, number] = dNext <= rIn ? [x, y] : [ncx + ((x - ncx) / dNext) * rIn, ncy + ((y - ncy) / dNext) * rIn]
           wanderGoal = pickHold(near[0], near[1], Math.min(35, Math.max(8, nr * 0.25)), ncx, ncy, rIn, z)
+          if (P.ffaRoof && nr > 40) wanderGoal = pickRoof(near[0], near[1], Math.min(120, nr * 0.5), ncx, ncy, rIn, true) ?? wanderGoal
         } else {
           const a = rng.next() * TAU
           const rr = Math.sqrt(rng.next()) * Math.max(0, nr * 0.55)
