@@ -43,7 +43,7 @@ export const PARAMS = {
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
   hunterAim: 0,
   /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
-  practiceCalmHp: 0,
+  practiceCalmHp: 0.6,
   hunterRange: 150,
   hunterClose: 30,
   /** allow switching to the free-for-all survival policy */
@@ -60,8 +60,8 @@ export const PARAMS = {
   /** preferred distance when we only have the gun */
   gunRange: 70,
   /** practice only: preferred distance with only the gun / with a laser (0 = same as gunRange / laserRange) */
-  practiceGunRange: 140,
-  practiceLaserRange: 130,
+  practiceGunRange: 0,
+  practiceLaserRange: 0,
   /** sideways component while strafing in a fight (0..1) */
   strafe: 0.9,
   /** ignore mechs farther than this unless they are shooting at us */
