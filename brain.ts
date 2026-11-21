@@ -31,7 +31,7 @@ export const PARAMS = {
   /** v1 healing: stand still in place when below 60% HP; otherwise heal from cover if we can find it */
   healStill: false,
   /** practice: roam at full speed (looking for drones, crates, cubes) until this time */
-  roamFastUntil: 0,
+  roamFastUntil: 150,
   /** duck into cover while the gun reloads or when losing the HP race */
   coverFight: true,
   /** practice too: only fight mechs that attack us, come close, or are nearly dead (never poke idle house bots) */
@@ -74,7 +74,7 @@ export const PARAMS = {
   /** practice: after this time, wait on a roof near the next circle instead of roaming (0 = off) */
   roofAfter: 0,
   /** practice: before this time, actively walk to remembered drones to farm cubes (0 = off) */
-  farmUntil: 0,
+  farmUntil: 150,
   flipMin: 0.8,
   flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
