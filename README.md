@@ -9,6 +9,7 @@ A TypeScript (Bun) bot for the Builders Buildathon Mech Royale track (`mechfight
 - `mechfight.ts`: the kit's protocol wrapper.
 - `tools/check.sh`: runs the kit's `check.py` natively and against the linux/amd64 image in the match sandbox.
 - `tools/replay.py`: feeds the recorded stream one observation at a time and prints the bot's actions.
+- `sim/`: approximate headless match simulator (`sim.ts`) with a house-squad emulator, a tournament runner (`run.ts`) and a paired practice A/B script (`ab.sh`). Not part of the image.
 - `tools/navsim.ts`: movement-only harness (approximate physics, real zone schedule) that runs the bot in-process to catch navigation failures.
 
 Build: `docker build --platform linux/amd64 -t mech-bot .`

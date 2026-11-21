@@ -34,6 +34,28 @@ export const PARAMS = {
   roamFastUntil: 150,
   /** duck into cover while the gun reloads or when losing the HP race */
   coverFight: true,
+  /** practice too: only fight mechs that attack us, come close, or are nearly dead (never poke idle house bots) */
+  selectiveFights: false,
+  /** distance under which any visible mech is fought when fights are selective */
+  engageRange: 55,
+  /** allow switching to the free-for-all survival policy */
+  ffaMode: true,
+  /** preferred distance when we only have the gun */
+  gunRange: 70,
+  /** sideways component while strafing in a fight (0..1) */
+  strafe: 0.9,
+  /** ignore mechs farther than this unless they are shooting at us */
+  maxEngage: 150,
+  /** shoot back at a drone that is hitting us before poking distant mechs */
+  npcThreat: true,
+  /** when two or more mechs are on us, back off to a longer range */
+  kite: false,
+  /** score bonus (metres) for a mech that hurt us in the last 4 s */
+  attackerBonus: 40,
+  /** swing round to face a mech that is hitting us from out of view */
+  faceAttacker: false,
+  /** do not start healing until this long after the last hit */
+  healCalm: 0,
 }
 
 const WEAPON_PRIO: Record<string, number> = { lightning: 3, laser: 2, mortar: 1, gun: 0 }
@@ -51,9 +73,25 @@ class Rng {
   }
 }
 
-export function makeBot(hello: Hello) {
+/** Map and nav grid are read-only, so several bots in one process (the simulator) can share them. */
+const sharedMaps = new Map<string, { map: GameMap; nav: NavGrid | null }>()
+
+export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
+  const P = { ...PARAMS, ...overrides }
   const cfg = hello.config
-  const map = new GameMap(hello.map.dir, hello.map.files)
+  const mapKey = hello.map.dir + "|" + hello.map.files.join(",")
+  let shared = sharedMaps.get(mapKey)
+  const firstLoad = !shared
+  if (!shared) {
+    const m = new GameMap(hello.map.dir, hello.map.files)
+    let n: NavGrid | null = null
+    if (m.ok) {
+      try { n = new NavGrid(m) } catch (e) { console.error("nav init failed", e) }
+    }
+    shared = { map: m, nav: n }
+    sharedMaps.set(mapKey, shared)
+  }
+  const map = shared.map
   const rng = new Rng(hello.seed)
   const W = cfg.weapons
   const stepUp = cfg.mech.step_up ?? 1.2
@@ -82,6 +120,9 @@ export function makeBot(hello: Hello) {
   let dodgeUntil = -1
   let dodgeDir = 0
   let stuckCount = 0
+  let lastHitBy = -1
+  let lastHitBearing = 0
+  let lastHitT = -99
   /** weapons seen on the ground (they never despawn; forgotten once we see the spot empty) */
   const knownPickups = new Map<number, { kind: string; pos: [number, number, number]; t: number }>()
   let goalBudget = 10
@@ -207,14 +248,14 @@ export function makeBot(hello: Hello) {
   // --- path planning ---
   let nav: NavGrid | null = null
   let planner: Planner | null = null
-  if (map.ok) {
+  if (map.ok && shared.nav) {
     try {
-      nav = new NavGrid(map)
+      nav = shared.nav
       planner = new Planner(nav)
       // warm up the JIT on the hot paths (planner, line of sight) while the hello budget is generous
       const w0 = performance.now()
       const pts = [[0, 0, 300, 200], [-300, -200, 250, 250], [200, -250, -250, 150], [-100, 250, 100, -250]]
-      for (let rep = 0; rep < 3 && performance.now() - w0 < 4000; rep++) {
+      for (let rep = 0; rep < (firstLoad ? 3 : 0) && performance.now() - w0 < 4000; rep++) {
         for (const [ax, ay, bx, by] of pts) {
           planner.begin(ax, ay, map.topAt(ax, ay), bx, by)
           while (planner.step(50) === "running" && performance.now() - w0 < 4000) {}
@@ -426,6 +467,7 @@ export function makeBot(hello: Hello) {
           threatYaw = e.bearing
           threatT = t
           attackers.set(e.by, t)
+          if (e.by < 100) { lastHitBy = e.by; lastHitBearing = e.bearing; lastHitT = t }
         }
       }
     }
@@ -451,7 +493,7 @@ export function makeBot(hello: Hello) {
         const prev = lastHp.get(m.id)
         if (prev != null && m.hp < prev - 40 && !hitNow.has(m.id)) infight += 0.5
       }
-      if ((othersDead >= 2 && t < 120) || (othersDead >= 3 && t < 200) || othersDead >= 6 || infight >= 3) ffa = true
+      if (P.ffaMode && ((othersDead >= 2 && t < 120) || (othersDead >= 3 && t < 200) || othersDead >= 6 || infight >= 3)) ffa = true
     }
     for (const m of obs.mechs) if (m.kind === "mech" && m.hp != null) lastHp.set(m.id, m.hp)
     for (const s of obs.sounds) {
@@ -501,20 +543,22 @@ export function makeBot(hello: Hello) {
       const vis = map.los(x, y, eyeZ, m.pos[0], m.pos[1], m.pos[2] + targetHeight(m))
       if (vis) lastVis.set(m.id, t)
       lastMechSeenT = t
-      if (ffa) {
+      if (ffa || P.selectiveFights) {
         // free-for-all: only take fights that are forced on us or cheap
         const at0 = attackers.get(m.id)
-        const engaged = (at0 != null && t - at0 < 6) || d < 55 || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
+        const engaged = (at0 != null && t - at0 < 6) || d < P.engageRange || ((m.hp ?? 1400) < (m.max_hp ?? 1400) * 0.4 && d < 150) || m.id === lastTargetId
         if (!engaged) {
           if (d < watchD) { watchD = d; watch = m }
           continue
         }
       }
+      const atk = attackers.get(m.id)
+      if (d > P.maxEngage && !(atk != null && t - atk < 6)) continue
       let sc = d + (m.hp ?? 1400) / 20 + (vis ? 0 : 120)
       if (m.id === lastTargetId) sc -= 25
       if (m.charging) sc -= 20
       const at = attackers.get(m.id)
-      if (at != null && t - at < 4) sc -= 40
+      if (at != null && t - at < 4) sc -= P.attackerBonus
       if (sc < bestScore) { bestScore = sc; target = m }
     }
     let npcTarget: ActorObs | null = null
@@ -528,6 +572,18 @@ export function makeBot(hello: Hello) {
         if (d < bd) { bd = d; npcTarget = m }
       }
     }
+    if (P.npcThreat && (!target || hyp2(x, y, target.pos[0], target.pos[1]) > 80)) {
+      for (const m of obs.mechs) {
+        if (m.kind !== "npc") continue
+        const at = attackers.get(m.id)
+        if (at == null || t - at > 3 || hyp2(x, y, m.pos[0], m.pos[1]) > 70) continue
+        target = null
+        npcTarget = m
+        break
+      }
+    }
+    let threats = 0
+    for (const m of obs.mechs) if (m.kind === "mech" && hyp2(x, y, m.pos[0], m.pos[1]) < 120 && t - (lastVis.get(m.id) ?? -99) < 1) threats++
     const fightTarget = target ?? npcTarget
     lastTargetId = target ? target.id : -1
 
@@ -714,7 +770,17 @@ export function makeBot(hello: Hello) {
           }
         }
       }
-    } else if (!fightTarget) {
+    }
+    // a mech is hitting us from out of view: swing round to find it (unless we are mid-charge)
+    const attackerSeen = obs.mechs.some((m) => m.id === lastHitBy && t - (lastVis.get(m.id) ?? -99) < 0.3)
+    const unseenAttacker = P.faceAttacker && t - lastHitT < 1.5 && !attackerSeen && (!target || target.id !== lastHitBy)
+    if (unseenAttacker && !usedMortar && !(secW?.kind === "laser" && (secW.charge ?? 0) > 0)) {
+      aimYaw = lastHitBearing
+      aimPitch = 0
+      fire0 = false
+      fire1 = false
+    }
+    if (!fightTarget) {
       // release a held laser charge if nothing to shoot at
       if (secW?.kind === "laser" && (secW.charge ?? 0) > 0) {
         // keep holding (auto-fires after hold_s); nothing to do
@@ -871,21 +937,23 @@ export function makeBot(hello: Hello) {
       else if (tw.includes("lightning")) want = 80
       else if (secW?.kind === "laser") want = 90
       else if (secW?.kind === "mortar") want = 80
-      else want = 70
+      else want = P.gunRange
+      if (P.kite && threats >= 2 && !(secW?.kind === "lightning" && me.energy > 20)) want = Math.max(want, 100)
       let radial = clamp((d - want) / 25, -1, 1)
       const tHp = fightTarget.hp ?? 1400
       if (target && hpFrac < 0.3 && tHp > me.hp) radial = -1 // retreat while facing
-      const sx = Math.cos(toT) * radial + Math.cos(toT + Math.PI / 2) * strafeSign * 0.9
-      const sy = Math.sin(toT) * radial + Math.sin(toT + Math.PI / 2) * strafeSign * 0.9
+      const sx = Math.cos(toT) * radial + Math.cos(toT + Math.PI / 2) * strafeSign * P.strafe
+      const sy = Math.sin(toT) * radial + Math.sin(toT + Math.PI / 2) * strafeSign * P.strafe
       moveYaw = Math.atan2(sy, sx)
-      speed = 1
+      speed = Math.min(1, Math.hypot(sx, sy) + 0.2)
       if (goal && hyp2(x, y, goal[0], goal[1]) < 25) {
         moveYaw = Math.atan2(goal[1] - y, goal[0] - x)
+        speed = 1
       }
       const lv = lastVis.get(fightTarget.id) ?? -99
       const visNow = t - lv < 0.15
       // cover while the gun reloads (and nothing else can shoot) or while losing the HP race
-      if (PARAMS.coverFight && target && visNow && d < 200) {
+      if (P.coverFight && target && visNow && d < 200) {
         const secReady = secW != null && ((secW.kind === "lightning" && d < (secW.stats.range ?? 45) && me.energy > 10) || (secW.kind !== "lightning" && secW.cooldown < 0.3))
         const reloading = gun != null && ((gun.reload ?? 0) > 0.4 || (gun.ammo ?? 1) === 0)
         const losing = hpFrac < 0.45 && tHp > me.hp * 1.2
@@ -902,7 +970,7 @@ export function makeBot(hello: Hello) {
         }
       }
       // lost line of sight on a mech: re-acquire it only when it is nearly dead (or always, in the v1 variant)
-      if (target && t - lv > 1.0 && hpFrac > 0.5 && (PARAMS.chaseAlways || tHp < (fightTarget.max_hp ?? 1400) * 0.35)) {
+      if (target && t - lv > 1.0 && hpFrac > 0.5 && (P.chaseAlways || tHp < (fightTarget.max_hp ?? 1400) * 0.35)) {
         navGoal = [p[0], p[1]]
         mode = "chase"
       }
@@ -924,7 +992,7 @@ export function makeBot(hello: Hello) {
         moveYaw = Math.atan2(cp[1] - y, cp[0] - x)
         speed = 0.42
       } else speed = 0
-    } else if (PARAMS.healStill && hpFrac < 0.6 && t - lastDamageT > 0.5 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15)) {
+    } else if (P.healStill && hpFrac < 0.6 && t - lastDamageT > 0.5 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15)) {
       // v1 healing: hold still (silent), facing where the danger came from
       mode = "heal"
       speed = 0
@@ -933,7 +1001,7 @@ export function makeBot(hello: Hello) {
         aimYaw = base + Math.sin(t * 0.7) * 0.7
         aimPitch = 0
       }
-    } else if (!PARAMS.healStill && hpFrac < 0.6 && threatYaw != null && t - threatT < 20 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15) &&
+    } else if (!P.healStill && hpFrac < 0.6 && t - lastDamageT > P.healCalm && threatYaw != null && t - threatT < 20 && !(goal && hyp2(x, y, goal[0], goal[1]) < 15) &&
       (coverCache?.id === -2 && t - coverCache.t < 3 ? coverCache.p : (coverCache = { id: -2, t, p: findCover(x, y, z, x + Math.cos(threatYaw) * 70, y + Math.sin(threatYaw) * 70, z + 8, 16) }).p)) {
       // heal out of sight of where the last threat came from
       mode = "heal"
@@ -975,7 +1043,7 @@ export function makeBot(hello: Hello) {
       if (finalPhase) wanderGoal = clampToZone([ncx, ncy], zn)
       const dw = hyp2(x, y, wanderGoal[0], wanderGoal[1])
       navGoal = dw < 3 ? null : wanderGoal
-      const fast = !ffa && t < PARAMS.roamFastUntil
+      const fast = !ffa && t < P.roamFastUntil
       speed = needNext > 0 || fast ? 1 : dw < 3 ? 0 : 0.42
       if (ffa) mode = "hold"
     }
