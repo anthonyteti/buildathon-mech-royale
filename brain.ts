@@ -65,6 +65,12 @@ export const PARAMS = {
   hpWeight: 0.05,
   /** fraction of the target's velocity used for gun lead */
   leadScale: 1,
+  /** fight movement: irregular jinks across the line of fire (0 = off; value = weight of range keeping) */
+  jink: 0,
+  jinkMin: 0.3,
+  jinkRand: 0.4,
+  /** random spread (radians) around the perpendicular for each jink */
+  jinkSpread: 1.0,
   /** multiplier on the aim error we accept before firing the gun */
   fireTol: 1,
   /** sidestep incoming gun bullets */
@@ -169,6 +175,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let dodgeUntil = -1
   let dodgeDir = 0
   let stuckCount = 0
+  let jinkUntil = -1
+  let jinkYaw = 0
+  let jinkSpeed = 1
   let lastHitBy = -1
   let fightSpot: { t: number; p: [number, number] | null; id: number } | null = null
   let healSpot: [number, number] | null = null
@@ -1042,6 +1051,20 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const sy = Math.sin(toT) * radial + Math.sin(toT + Math.PI / 2) * strafeSign * P.strafe
       moveYaw = Math.atan2(sy, sx)
       speed = Math.min(1, Math.hypot(sx, sy) + 0.2)
+      if (P.jink > 0 && target) {
+        // irregular jinks: new heading and speed every jinkMin..jinkMin+jinkRand seconds, roughly across the line of fire
+        if (t > jinkUntil) {
+          const side = rng.next() < 0.5 ? 1 : -1
+          const off = (Math.PI / 2) * side + (rng.next() - 0.5) * P.jinkSpread
+          jinkYaw = off
+          jinkSpeed = 0.55 + rng.next() * 0.45
+          jinkUntil = t + P.jinkMin + rng.next() * P.jinkRand
+        }
+        const jy = toT + jinkYaw
+        const rx2 = Math.cos(jy) + Math.cos(toT) * radial * P.jink, ry2 = Math.sin(jy) + Math.sin(toT) * radial * P.jink
+        moveYaw = Math.atan2(ry2, rx2)
+        speed = jinkSpeed
+      }
       if (goal && hyp2(x, y, goal[0], goal[1]) < 25) {
         moveYaw = Math.atan2(goal[1] - y, goal[0] - x)
         speed = 1
