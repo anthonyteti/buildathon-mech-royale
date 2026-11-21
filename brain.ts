@@ -39,7 +39,7 @@ export const PARAMS = {
   /** distance under which any visible mech is fought when fights are selective */
   engageRange: 55,
   /** with selective fights in practice: fight any visible mech within this distance */
-  practiceEngageRange: 45,
+  practiceEngageRange: 60,
   /** allow switching to the free-for-all survival policy */
   ffaMode: true,
   /** play the free-for-all policy from t=0 in every match */
