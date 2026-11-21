@@ -42,8 +42,12 @@ export const PARAMS = {
   practiceEngageRange: 60,
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
   hunterAim: 0,
+  /** practice: from this time on, wait in a sheltered spot inside the next circle instead of roaming (0 = off) */
+  practiceHold: 0,
+  /** practice: while holding, go for cubes only this far away */
+  holdCubeRange: 35,
   /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
-  practiceCalmHp: 0.6,
+  practiceCalmHp: 0,
   hunterRange: 150,
   hunterClose: 30,
   /** allow switching to the free-for-all survival policy */
@@ -1128,7 +1132,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
           if (goalId !== id) { goalId = id; goalSince = t; goalBudget = 8 + d / 7 }
         }
       }
-      for (const c of obs.cubes) consider(c.id, c.pos[0], c.pos[1], c.pos[2], target ? P.cubeFightRange : 90, 30, "cube")
+      const holding = !ffa && P.practiceHold > 0 && t >= P.practiceHold
+      for (const c of obs.cubes) consider(c.id, c.pos[0], c.pos[1], c.pos[2], target ? P.cubeFightRange : holding ? P.holdCubeRange : 90, 30, "cube")
       const kindBias: Record<string, number> = {}
       for (const k of ["lightning", "laser", "mortar"]) kindBias[k] = wprio[k] === 3 ? 40 : wprio[k] === 2 ? 15 : 0
       for (const [id, kp] of knownPickups) {
@@ -1408,13 +1413,14 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       // wander inside the next circle
       mode = "roam"
       const nr = zone.next_radius
-      const repick = ffa
+      const hm = ffa || (P.practiceHold > 0 && t >= P.practiceHold)
+      const repick = hm
         ? !wanderGoal || !wanderFfa || hyp2(wanderGoal[0], wanderGoal[1], ncx, ncy) > nr * 0.6 + 1 || hyp2(wanderNc[0], wanderNc[1], ncx, ncy) > 1
         : !wanderGoal || wanderFfa || t - wanderT > 25 || hyp2(x, y, wanderGoal[0], wanderGoal[1]) < 6
       if (repick) {
-        wanderFfa = ffa
+        wanderFfa = hm
         wanderNc = [ncx, ncy]
-        if (ffa) {
+        if (hm) {
           // a sheltered spot near the nearest comfortable point inside the next circle: minimal exposure
           const rIn = Math.max(0, nr * 0.6)
           const near: [number, number] = dNext <= rIn ? [x, y] : [ncx + ((x - ncx) / dNext) * rIn, ncy + ((y - ncy) / dNext) * rIn]
@@ -1437,9 +1443,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (finalPhase) wanderGoal = clampToZone([ncx, ncy], zn)
       const dw = hyp2(x, y, wanderGoal[0], wanderGoal[1])
       navGoal = dw < 3 ? null : wanderGoal
-      const fast = !ffa && t < P.roamFastUntil
+      const fast = !hm && t < P.roamFastUntil
       speed = needNext > 0 || fast ? 1 : dw < 3 ? 0 : 0.42
-      if (ffa) mode = "hold"
+      if (hm) mode = "hold"
     }
 
     // endgame: once the last circle is set, stand on the final centre (kept inside the moving circle)

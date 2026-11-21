@@ -771,6 +771,14 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
         drops.push({ id: 20000 + drops.length, pos: p, landsAt: t + cfg.drops.fall_s, progress: 0, holder: null, taken: false, calledAt: t })
       }
     }
+    if (process.env.PRACLOG && practice && tick % decideEvery === 0) for (const m of mechs) if (m.alive && m.ctrl.kind !== "house") {
+      const q: any = m
+      const hs = mechs.filter((h) => h.alive && h.ctrl.kind === "house")
+      let nSee = 0, nd = 1e9, nAtk = 0, nNear = 0
+      for (const h of hs) { const d = hyp(m.pos[0], m.pos[1], h.pos[0], h.pos[1]); if (d < nd) nd = d; if (d < 200 && seesMech(h, m)) nSee++; if (d < 100) nNear++; if ((m.damageBy.get(h.id) ?? -99) > t - 2) nAtk++ }
+      const roof = m.pos[2] - MAP.groundAt(m.pos[0], m.pos[1])
+      ;(q.plog ??= []).push([Math.round(t * 10) / 10, +Math.hypot(m.vel[0], m.vel[1]).toFixed(1), +roof.toFixed(1), nSee, Math.round(nd), nAtk, nNear, Math.round(m.hp), m.kills, m.weapons.filter((w) => w).map((w) => w!.kind[0]).join(""), Math.round((q.taken ?? 0)), Math.round((q.dealt ?? 0))])
+    }
     if (process.env.TRAJLOG && tick % decideEvery === 0) for (const m of mechs) if (m.alive && m.id < 2) { const q: any = m; const g = m.weapons.find((w) => w?.kind === "gun"); const o = mechs[1 - m.id]; (q.traj ??= []).push([Math.round(t * 100) / 100, +m.pos[0].toFixed(2), +m.pos[1].toFixed(2), +m.vel[0].toFixed(2), +m.vel[1].toFixed(2), g ? g.ammo : -1, g ? +g.reload.toFixed(2) : -1, q.shots ?? 0, o && o.alive ? (los(muzzleOf(m), centerOf(o)) ? 1 : 0) : -1, +m.hp.toFixed(0), String((m.action as any)?.label ?? "").replace(/^F /, "").split(" ")[0]]) }
     if (tick % decideEvery === 0) {
       const hunters = practice ? houseHunters() : new Set<number>()
@@ -1020,7 +1028,7 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
   const surv = mechs.filter((m) => m.alive).sort((a, b) => b.hp - a.hp)
   surv.forEach((m, i) => { m.place = i + 1; m.deathT = t })
   // dead-early end (our bots all dead): remaining house bots outlive us; places already set for the dead
-  const results: MechResult[] = mechs.map((m) => ({ id: m.id, label: m.ctrl.label, place: m.place, kills: m.kills, deathT: Math.round(m.deathT * 10) / 10, cubes: m.cubes, hp: Math.round(m.hp), cause: (m as any).cause ?? (m.alive ? "alive" : "?"), shots: (m as any).shots ?? 0, hits: (m as any).hits ?? 0, loadout: m.weapons.filter((w) => w).map((w) => w!.kind).join("+"), takenBy: (m as any).takenBy ?? {}, ffaAt: (m as any).ffaAt ?? null, takenRear: Math.round((m as any).takenRear ?? 0), hitDist: (m as any).hitDist ?? {}, shotLog: process.env.SHOTLOG ? (m as any).shotLog ?? [] : undefined, traj: process.env.TRAJLOG ? (m as any).traj ?? [] : undefined, nAttackers: ((m as any).attackersSet?.size ?? 0), drops: (m as any).drops ?? 0, dealt: Math.round((m as any).dealt ?? 0), taken: Math.round((m as any).taken ?? 0) }))
+  const results: MechResult[] = mechs.map((m) => ({ id: m.id, label: m.ctrl.label, place: m.place, kills: m.kills, deathT: Math.round(m.deathT * 10) / 10, cubes: m.cubes, hp: Math.round(m.hp), cause: (m as any).cause ?? (m.alive ? "alive" : "?"), shots: (m as any).shots ?? 0, hits: (m as any).hits ?? 0, loadout: m.weapons.filter((w) => w).map((w) => w!.kind).join("+"), takenBy: (m as any).takenBy ?? {}, ffaAt: (m as any).ffaAt ?? null, takenRear: Math.round((m as any).takenRear ?? 0), hitDist: (m as any).hitDist ?? {}, shotLog: process.env.SHOTLOG ? (m as any).shotLog ?? [] : undefined, traj: process.env.TRAJLOG ? (m as any).traj ?? [] : undefined, plog: process.env.PRACLOG ? (m as any).plog ?? [] : undefined, nAttackers: ((m as any).attackersSet?.size ?? 0), drops: (m as any).drops ?? 0, dealt: Math.round((m as any).dealt ?? 0), taken: Math.round((m as any).taken ?? 0) }))
   if (process.env.FIRESTAT) console.error("firestat " + JSON.stringify((globalThis as any).fs))
   if (opt.verbose) {
     timing.sort((a, b) => a - b)
