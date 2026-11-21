@@ -42,6 +42,8 @@ export const PARAMS = {
   practiceEngageRange: 90,
   /** allow switching to the free-for-all survival policy */
   ffaMode: true,
+  /** play the free-for-all policy from t=0 in every match */
+  ffaStart: false,
   /** preferred distance when we only have the gun */
   gunRange: 70,
   /** sideways component while strafing in a fight (0..1) */
@@ -174,7 +176,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   const knownPickups = new Map<number, { kind: string; pos: [number, number, number]; t: number }>()
   let goalBudget = 10
   // practice (house squad hunting us) vs free-for-all detection
-  let ffa = false
+  let ffa = P.ffaStart
   let ourKills = 0
   let infight = 0
   const lastHp = new Map<number, number>()
