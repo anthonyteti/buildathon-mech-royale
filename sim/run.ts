@@ -19,7 +19,7 @@ const flag = (name: string, def: string) => {
 if (args[0] === "--child") {
   const { runMatch } = await import("./sim.ts")
   const spec = JSON.parse(args[1])
-  const out = runMatch(spec)
+  const out = await runMatch(spec)
   process.stdout.write(JSON.stringify(out) + "\n")
   process.exit(0)
 }
@@ -32,6 +32,7 @@ const A = { label: "A", ...JSON.parse(flag("a", "{}")) }
 const Bs = flag("b", "")
 const B = Bs ? { label: "B", ...JSON.parse(Bs) } : null
 const houseN = Number(flag("house", "0"))
+const oppArg = flag("opp", "")
 const maxT = Number(flag("maxT", "480"))
 
 type Job = { spec: any; tag: string }
@@ -43,8 +44,11 @@ for (let i = 0; i < n; i++) {
     if (B) queue.push({ tag: "B", spec: { seed, mode, ours: [B], maxT } })
   } else {
     const ours: any[] = []
+    const opps: string[] = []
+    for (const part of oppArg ? oppArg.split(",") : []) { const [name, k] = part.split(":"); for (let j = 0; j < Number(k ?? 1); j++) opps.push(name) }
     for (let s = 0; s < 16; s++) {
       if (s < houseN) { ours.push(null); continue }
+      if (s < houseN + opps.length) { ours.push({ ext: opps[s - houseN], label: opps[s - houseN] }); continue }
       const k = (s + i) % 2
       ours.push(!B || k === 0 ? A : B)
     }

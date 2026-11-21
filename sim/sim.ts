@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs"
 import { makeBot, type PARAMS } from "../brain.ts"
 import { GameMap } from "../map.ts"
 import { draw } from "../mechfight.ts"
+import { ExtBot, extSpec } from "./ext.ts"
 
 type V3 = [number, number, number]
 type WK = "gun" | "mortar" | "laser" | "lightning"
@@ -33,7 +34,7 @@ class Rng {
 }
 
 type Weapon = { kind: WK; cooldown: number; ammo: number; reload: number; charge: number; held: number; equip: number }
-type Controller = { kind: "ours"; act: (obs: any) => any; label: string } | { kind: "house"; tier: number; label: string }
+type Controller = { kind: "ours"; act: (obs: any) => any; label: string } | { kind: "house"; tier: number; label: string } | { kind: "ext"; bot: ExtBot; label: string }
 
 type Mech = {
   id: number
@@ -120,7 +121,7 @@ function openGroundPoint(rng: Rng, cx: number, cy: number, r: number, roof = fal
   return [cx, cy, MAP.topAt(cx, cy)]
 }
 
-export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } {
+export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]; t: number }> {
   const rng = new Rng(opt.seed * 7919 + 13)
   const cfg = CFG
   const W = cfg.weapons
@@ -177,7 +178,9 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
   for (let i = 0; i < N; i++) {
     let ctrl: Controller
     const spec = opt.mode === "practice" ? (i === ourSlot ? (opt.ours[0] ?? {}) : null) : opt.ours[i]
-    if (spec) {
+    if (spec && (spec as any).ext) {
+      ctrl = { kind: "ext", bot: new ExtBot(extSpec((spec as any).ext)), label: (spec as any).label ?? (spec as any).ext }
+    } else if (spec) {
       const hello = { type: "hello", protocol: "mechfight/1", slot: i, seed: opt.seed * 31 + i, map: { dir: `${KIT}/arena`, files: ["v2/world.json", "v2/terrain.i16"] }, config: cfg } as any
       const bot = makeBot(hello, spec)
       ctrl = { kind: "ours", act: (o: any) => bot.act(o), label: (spec as any).label ?? "ours" }
@@ -192,7 +195,13 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
       shortUntil: -9, stepAcc: 0, action: {}, lastFire: [false, false], damageBy: new Map(), lastDamageT: -99,
     })
   }
-  const ours = mechs.filter((m) => m.ctrl.kind === "ours")
+  const ours = mechs.filter((m) => m.ctrl.kind === "ours" || m.ctrl.kind === "ext")
+  await Promise.all(mechs.filter((m) => m.ctrl.kind === "ext").map(async (m) => {
+    const hello = { type: "hello", protocol: "mechfight/1", slot: m.id, seed: opt.seed * 31 + m.id, map: { dir: `${KIT}/arena`, files: ["v2/world.json", "v2/terrain.i16"] }, config: cfg }
+    const ok = await (m.ctrl as any).bot.hello(hello)
+    if (!ok && opt.verbose) console.error(`ext ${m.ctrl.label} not ready`)
+  }))
+  const extTimeout = Number(process.env.EXT_TIMEOUT_MS ?? 200)
 
   // --- world items ---
   const projs: Proj[] = []
@@ -269,6 +278,7 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
     v.deathT = t
     ;(v as any).cause = cause + (by != null ? `:${by < 16 ? mechs[by].ctrl.label : "npc"}` : "")
     deathsThisTick.push(v)
+    if (v.ctrl.kind === "ext") { const b = v.ctrl.bot; setTimeout(() => b.end(v.place, v.kills), 0) }
     emitSound("death", v.pos, v.id)
     for (const w of v.weapons) if (w && w.kind !== "gun") pickups.push({ id: pickupSeq++, pos: [v.pos[0] + rng.next() * 2 - 1, v.pos[1] + rng.next() * 2 - 1, v.pos[2]], kind: w.kind })
     const n = v.cubes + (by != null && by < 16 ? cfg.cubes.death_drop_extra : 0)
@@ -730,12 +740,23 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
     }
     if (tick % decideEvery === 0) {
       const hunters = practice ? houseHunters() : new Set<number>()
+      const extActs = new Map<number, Promise<any>>()
       for (const m of mechs) {
-        if (!m.alive) continue
+        if (!m.alive || m.ctrl.kind !== "ext") continue
         if (!m.offer && m.offersPending > 0) { m.offersPending--; makeOffer(m) }
         if (m.offer && t >= m.offer.expires) { applyUpgrade(m, m.offer.choices[0].id); m.offer = null }
+        extActs.set(m.id, m.ctrl.bot.act(buildObs(m, tick), extTimeout))
+      }
+      const extRes = new Map<number, any>()
+      for (const [id, pr] of extActs) extRes.set(id, await pr)
+      for (const m of mechs) {
+        if (!m.alive) continue
         let a: any
-        if (m.ctrl.kind === "ours") {
+        if (m.ctrl.kind === "ext") {
+          a = extRes.get(m.id) ?? { move: m.action.move, aim: m.action.aim, boost: m.action.boost }
+        } else if (m.ctrl.kind === "ours") {
+          if (!m.offer && m.offersPending > 0) { m.offersPending--; makeOffer(m) }
+          if (m.offer && t >= m.offer.expires) { applyUpgrade(m, m.offer.choices[0].id); m.offer = null }
           const obs = buildObs(m, tick)
           draw.clear()
           const t0 = performance.now()
@@ -748,6 +769,8 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
             console.error(`t=${t.toFixed(1)} hp=${Math.round(m.hp)} en=${Math.round(m.energy)} w=${m.weapons.map((w) => w ? w.kind[0] + (w.kind === "gun" ? w.ammo : "") : "-").join("")} ${a.label} | ${en.map((q) => `${q.v.id}:${Math.round(q.d)}m${seesMech(m, q.v) ? "V" : ""}${(q.v.ctrl as any).tier}${q.v.weapons.map((w) => w ? w.kind[0] : "").join("")}`).join(" ")} | ${dmg}`)
           }
         } else {
+          if (!m.offer && m.offersPending > 0) { m.offersPending--; makeOffer(m) }
+          if (m.offer && t >= m.offer.expires) { applyUpgrade(m, m.offer.choices[0].id); m.offer = null }
           a = houseAct(m, hunters, practice)
         }
         m.action = a
@@ -951,5 +974,8 @@ export function runMatch(opt: SimOptions): { results: MechResult[]; t: number } 
     timing.sort((a, b) => a - b)
     console.error(`match t=${t.toFixed(1)} act p50 ${timing[timing.length >> 1]?.toFixed(2)} p99 ${timing[Math.floor(timing.length * 0.99)]?.toFixed(2)} max ${timing[timing.length - 1]?.toFixed(2)}`)
   }
+  for (const m of mechs) if (m.ctrl.kind === "ext") m.ctrl.bot.end(m.place, m.kills)
+  const extStats = mechs.filter((m) => m.ctrl.kind === "ext").map((m) => ({ label: m.ctrl.label, late: (m.ctrl as any).bot.late, answered: (m.ctrl as any).bot.answered }))
+  if (opt.verbose && extStats.length) console.error(JSON.stringify(extStats))
   return { results, t }
 }
