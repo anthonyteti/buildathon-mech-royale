@@ -34,6 +34,7 @@ const B = Bs ? { label: "B", ...JSON.parse(Bs) } : null
 const houseN = Number(flag("house", "0"))
 const oppArg = flag("opp", "")
 const maxT = Number(flag("maxT", "480"))
+const duelD = Number(flag("duel", "0"))
 
 type Job = { spec: any; tag: string }
 const queue: Job[] = []
@@ -54,7 +55,12 @@ for (let i = 0; i < n; i++) {
     }
     // shuffle seats deterministically per match
     for (let s = 15; s > 0; s--) { const j = (seed * 7 + s * 13) % (s + 1); [ours[s], ours[j]] = [ours[j], ours[s]] }
-    queue.push({ tag: "ffa", spec: { seed, mode, ours, maxT } })
+    if (duelD > 0) {
+      // seat 0 = A, seat 1 = opponent (or B); swap sides every other match
+      const opp = oppArg ? { ext: oppArg.split(":")[0], label: oppArg.split(":")[0] } : B
+      const pair = i % 2 === 0 ? [A, opp] : [opp, A]
+      queue.push({ tag: "duel", spec: { seed, mode, ours: [...pair, ...Array(14).fill(A)], maxT: 120, duel: duelD } })
+    } else queue.push({ tag: "ffa", spec: { seed, mode, ours, maxT } })
   }
 }
 
@@ -96,6 +102,7 @@ let failed = 0
 for (const { job, out } of results) {
   if (!out) { failed++; continue }
   for (const r of out.results) {
+    if (job.tag === "duel") { if (r.id > 1) continue; add(r.label, { ...r, place: r.place === 1 ? 15 : 16 }) ; continue }
     if (r.label === "house") { add("house", r); continue }
     add(r.label, r)
   }

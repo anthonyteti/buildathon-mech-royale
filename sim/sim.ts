@@ -80,6 +80,8 @@ export type SimOptions = {
   ourSlot?: number
   verbose?: boolean
   maxT?: number
+  /** 1v1: only seats 0 and 1 play, spawned `duel` metres apart with line of sight; others start dead */
+  duel?: number
 }
 export type MechResult = { id: number; label: string; place: number; kills: number; deathT: number; cubes: number; hp: number; cause: string }
 
@@ -172,6 +174,19 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
     }
     spawns.push(p)
   }
+  if (opt.duel) {
+    for (let k = 0; k < 200; k++) {
+      const p0 = openGroundPoint(rng, 0, 0, 350)
+      const a = rng.next() * TAU
+      const q: V3 = [p0[0] + Math.cos(a) * opt.duel, p0[1] + Math.sin(a) * opt.duel, 0]
+      if (!MAP.inBounds(q[0], q[1])) continue
+      q[2] = MAP.topAt(q[0], q[1])
+      if (Math.abs(q[2] - MAP.groundAt(q[0], q[1])) > 0.5 || bodyBlocked(q[0], q[1], q[2], 2.6, 9)) continue
+      if (!MAP.los(p0[0], p0[1], p0[2] + 8, q[0], q[1], q[2] + 4.5)) continue
+      spawns[0] = p0; spawns[1] = q
+      break
+    }
+  }
   const ourSlot = opt.ourSlot ?? Math.floor(rng.next() * N)
   const tiers = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]
   let houseIdx = 0
@@ -234,6 +249,13 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
   const los = (a: V3, b: V3) => MAP.los(a[0], a[1], a[2], b[0], b[1], b[2])
   let t = 0
   let aliveCount = N
+  if (opt.duel) {
+    for (const m of mechs) if (m.id > 1) { m.alive = false; m.place = 16; m.deathT = 0 }
+    aliveCount = 2
+    // face each other
+    const a0 = Math.atan2(mechs[1].pos[1] - mechs[0].pos[1], mechs[1].pos[0] - mechs[0].pos[0])
+    mechs[0].aim = [a0, 0]; mechs[1].aim = [wrap(a0 + Math.PI), 0]
+  }
 
   function emitSound(kind: string, at: V3, except: number) {
     const range = cfg.sound.range[kind] ?? 100
