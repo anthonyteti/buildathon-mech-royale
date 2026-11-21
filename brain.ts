@@ -84,11 +84,11 @@ export const PARAMS = {
   /** swing round to face a mech that is hitting us from out of view */
   faceAttacker: false,
   /** do not start healing until this long after the last hit */
-  healCalm: 0,
+  healCalm: 3,
   /** in a fight with other mechs around, move to a nearby spot that keeps the target in sight but hides us from the others */
   fightPos: false,
   /** after a fight, sit in a sheltered spot until HP is back above this fraction (0 = off) */
-  healTo: 0,
+  healTo: 0.8,
   /** second-weapon preference, best first */
   weaponOrder: "laser,lightning,mortar",
   /** with a laser in hand, open fights out to this range */
