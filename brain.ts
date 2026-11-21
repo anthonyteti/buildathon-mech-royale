@@ -64,7 +64,7 @@ export const PARAMS = {
   /** target score: metres added per HP point of the target (lower HP = preferred) */
   hpWeight: 0.05,
   /** fraction of the target's velocity used for gun lead */
-  leadScale: 0.5,
+  leadScale: 1,
   /** per-decision smoothing factor for target velocity used in lead (1 = raw) */
   velSmooth: 1,
   /** adapt gun lead to how often the target changes velocity: acceleration (m/s^2) where lead starts dropping (0 = off) */
