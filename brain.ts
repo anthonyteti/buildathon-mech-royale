@@ -35,11 +35,11 @@ export const PARAMS = {
   /** duck into cover while the gun reloads or when losing the HP race */
   coverFight: true,
   /** practice too: only fight mechs that attack us, come close, or are nearly dead (never poke idle house bots) */
-  selectiveFights: false,
+  selectiveFights: true,
   /** distance under which any visible mech is fought when fights are selective */
   engageRange: 55,
   /** with selective fights in practice: fight any visible mech within this distance */
-  practiceEngageRange: 90,
+  practiceEngageRange: 60,
   /** allow switching to the free-for-all survival policy */
   ffaMode: true,
   /** play the free-for-all policy from t=0 in every match */
