@@ -44,6 +44,10 @@ export const PARAMS = {
   hunterAim: 0,
   /** practice: from this time on, wait in a sheltered spot inside the next circle instead of roaming (0 = off) */
   practiceHold: 15,
+  /** practice: with no fight, face and hide from (into cover, slow and silent) any mech we are not fighting within this range (0 = off) */
+  practiceHide: 0,
+  /** practice: weight of shelter vs distance when picking a hold spot (1 = as in free-for-all) */
+  holdCoverWeight: 1,
   /** practice: while holding, go for cubes only this far away */
   holdCubeRange: 70,
   /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
@@ -334,6 +338,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   }
   /** Best sheltered, reachable-looking spot within `rad` of (nx,ny) that stays within `rIn` of the circle centre. */
   function pickHold(nx: number, ny: number, rad: number, cx: number, cy: number, rIn: number, z: number): [number, number] {
+    const cw = ffa ? 1 : P.holdCoverWeight
     let best: [number, number] = [nx, ny], bestSc = -Infinity
     for (let k = 0; k < 40; k++) {
       const a = rng.next() * TAU, r = k === 0 ? 0 : Math.sqrt(rng.next()) * rad
@@ -345,7 +350,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       let fits = true
       for (let q = 0; q < 8 && fits; q++) if (map.topAt(px + Math.cos(q * 0.785) * 3, py + Math.sin(q * 0.785) * 3) > pz + 1.2) fits = false
       if (!fits) continue
-      const sc = coverScore(px, py, pz) - r / 120 - Math.abs(pz - z) / 200
+      const sc = coverScore(px, py, pz) * cw - r / 120 - Math.abs(pz - z) / 200
       if (sc > bestSc) { bestSc = sc; best = [px, py] }
     }
     return best
@@ -1170,7 +1175,8 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     // crates as shoot targets when idle
     let bcActive = false
     // late game: dealing damage to crates/drones would reset our HP regen
-    if (!fightTarget && !usedMortar && !(ffa && watch) && !(t > 300 && me.hp < me.max_hp)) {
+    const hidingNow = !!watch && (ffa || (P.practiceHide > 0 && watchD < P.practiceHide))
+    if (!fightTarget && !usedMortar && !hidingNow && !(t > 300 && me.hp < me.max_hp)) {
       let bc: (typeof obs.crates)[number] | null = null, bd = 70
       for (const c of obs.crates) {
         const d = hyp2(x, y, c.pos[0], c.pos[1])
@@ -1350,7 +1356,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         const inYaw = Math.atan2(ncy - y, ncx - x)
         if (Math.cos(moveYaw - inYaw) < 0) moveYaw = inYaw + strafeSign * 0.6
       }
-    } else if (ffa && watch && watchD < 200) {
+    } else if ((ffa ? watchD < 200 : P.practiceHide > 0 && watchD < P.practiceHide && !zoneUrgent) && watch) {
       // free-for-all: someone we do not want to fight is in view; face it, stay quiet, get out of its sight
       mode = "hide"
       aimYaw = Math.atan2(watch.pos[1] - y, watch.pos[0] - x)
