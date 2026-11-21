@@ -35,7 +35,7 @@ export const PARAMS = {
   /** duck into cover while the gun reloads or when losing the HP race */
   coverFight: true,
   /** practice too: only fight mechs that attack us, come close, or are nearly dead (never poke idle house bots) */
-  selectiveFights: false,
+  selectiveFights: true,
   /** distance under which any visible mech is fought when fights are selective */
   engageRange: 55,
   /** with selective fights in practice: fight any visible mech within this distance */
@@ -84,11 +84,11 @@ export const PARAMS = {
   /** swing round to face a mech that is hitting us from out of view */
   faceAttacker: false,
   /** do not start healing until this long after the last hit */
-  healCalm: 3,
+  healCalm: 0,
   /** in a fight with other mechs around, move to a nearby spot that keeps the target in sight but hides us from the others */
   fightPos: false,
   /** after a fight, sit in a sheltered spot until HP is back above this fraction (0 = off) */
-  healTo: 0.8,
+  healTo: 0,
   /** second-weapon preference, best first */
   weaponOrder: "laser,lightning,mortar",
   /** with a laser in hand, open fights out to this range */
