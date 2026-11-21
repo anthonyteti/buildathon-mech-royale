@@ -44,6 +44,13 @@ export const PARAMS = {
   ffaMode: true,
   /** play the free-for-all policy from t=0 in every match */
   ffaStart: false,
+  /** stricter free-for-all detector (fewer false triggers in practice) */
+  strictDetect: false,
+  /** with strictDetect: deaths of other mechs (not by us) that switch to the free-for-all policy before 120 s / before 200 s / at any time, and the mech-vs-mech fire evidence needed */
+  ffaDead1: 3,
+  ffaDead2: 4,
+  ffaDead3: 6,
+  ffaInfight: 3,
   /** preferred distance when we only have the gun */
   gunRange: 70,
   /** sideways component while strafing in a fight (0..1) */
@@ -58,6 +65,8 @@ export const PARAMS = {
   npcAlways: false,
   /** practice upgrade order override (comma list, best first); empty = built-in */
   upgradeOrder: "",
+  /** free-for-all upgrade order override (comma list, best first); empty = built-in */
+  upgradeOrderFfa: "",
   /** keep away from drones (they open fire within 45 m) while mechs are around or we are hurt */
   npcAvoid: false,
   /** strafe direction flips every flipMin + rand * flipRand seconds */
@@ -76,6 +85,10 @@ export const PARAMS = {
   jinkRand: 0.4,
   /** random spread (radians) around the perpendicular for each jink */
   jinkSpread: 1.0,
+  /** gun lead learned per target: score several lead predictors on each mech's observed track and aim with the best */
+  aimLearn: false,
+  /** strafe flips always reverse direction (instead of a random new side) */
+  flipAlt: false,
   /** multiplier on the aim error we accept before firing the gun */
   fireTol: 1,
   /** sidestep incoming gun bullets */
@@ -197,6 +210,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let goalBudget = 10
   // practice (house squad hunting us) vs free-for-all detection
   let ffa = P.ffaStart
+  const lastHitOn = new Map<number, number>()
   let ourKills = 0
   let infight = 0
   const lastHp = new Map<number, number>()
@@ -206,6 +220,56 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let dodgeCover = false
   const lastVis = new Map<number, number>() // mech id -> last time we had line of sight
   const attackers = new Map<number, number>() // mech id -> last time it hurt us
+  // per-mech track for learned lead: recent positions, pending predictions, and a hit-rate score per predictor
+  // lead predictors: k >= 0 scales the current velocity; -1 mean velocity over 0.6 s, -2 half of it;
+  // -3 velocity extrapolated with the latest acceleration (capped at walk speed); -4 / -5: 0.75 v plus half / a quarter of the acceleration term
+  const LEAD_K = [1, 0.75, 0.5, 0.25, 0, -1, -2, -3, -4, -5]
+  type Track = { h: { t: number; x: number; y: number; vx: number; vy: number }[]; pend: { due: number; ux: number; uy: number; r: number; px: number[]; py: number[] }[]; sc: number[]; n: number; seen: number }
+  const tracks = new Map<number, Track>()
+  const trackAt = (tk: Track, tt: number): [number, number] | null => {
+    const h = tk.h
+    for (let i = h.length - 1; i > 0; i--) {
+      if (h[i - 1].t <= tt && h[i].t >= tt) {
+        const f = (tt - h[i - 1].t) / Math.max(1e-6, h[i].t - h[i - 1].t)
+        return [h[i - 1].x + (h[i].x - h[i - 1].x) * f, h[i - 1].y + (h[i].y - h[i - 1].y) * f]
+      }
+    }
+    return null
+  }
+  const meanVel = (tk: Track, w: number): [number, number] | null => {
+    const h = tk.h
+    if (h.length < 2) return null
+    const last = h[h.length - 1]
+    let j = h.length - 1
+    while (j > 0 && last.t - h[j - 1].t <= w + 0.01) j--
+    const dt = last.t - h[j].t
+    if (dt < w * 0.6) return null
+    return [(last.x - h[j].x) / dt, (last.y - h[j].y) / dt]
+  }
+  const predVel = (tk: Track, k: number, vx: number, vy: number, tau = 0.4): [number, number] => {
+    if (k >= 0) return [vx * k, vy * k]
+    if (k <= -3) {
+      const h = tk.h, n = h.length
+      let ax = 0, ay = 0
+      if (n >= 2 && h[n - 1].t - h[n - 2].t < 0.25) {
+        const dt = Math.max(0.05, h[n - 1].t - h[n - 2].t)
+        ax = (h[n - 1].vx - h[n - 2].vx) / dt; ay = (h[n - 1].vy - h[n - 2].vy) / dt
+        const am = Math.hypot(ax, ay)
+        if (am > 58.5) { ax *= 58.5 / am; ay *= 58.5 / am }
+      }
+      if (k === -3) {
+        let ex = vx + ax * tau * 0.5, ey = vy + ay * tau * 0.5
+        const sp = Math.hypot(ex, ey), cap = Math.max(11.7, Math.hypot(vx, vy))
+        if (sp > cap) { ex *= cap / sp; ey *= cap / sp }
+        return [(vx + ex) / 2, (vy + ey) / 2]
+      }
+      const af = k === -4 ? 0.5 : 0.25
+      return [vx * 0.75 + 0.5 * ax * tau * af, vy * 0.75 + 0.5 * ay * tau * af]
+    }
+    const mv = meanVel(tk, 0.6)
+    if (!mv) return [vx * 0.5, vy * 0.5]
+    return k === -1 ? mv : [mv[0] * 0.5, mv[1] * 0.5]
+  }
 
   function zoneNow(obs: Observation) {
     const z = obs.zone
@@ -546,7 +610,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     if (obs.offer) {
       let best = 0, bestScore = -1
       obs.offer.choices.forEach((c, i) => {
-        const r = (ffa ? UPGRADE_PRIO_FFA : P.upgradeOrder ? P.upgradeOrder.split(",") : UPGRADE_PRIO).indexOf(c.id)
+        const r = (ffa ? (P.upgradeOrderFfa ? P.upgradeOrderFfa.split(",") : UPGRADE_PRIO_FFA) : P.upgradeOrder ? P.upgradeOrder.split(",") : UPGRADE_PRIO).indexOf(c.id)
         const sc = r < 0 ? 0 : 100 - r
         if (sc > bestScore) { bestScore = sc; best = i }
       })
@@ -568,7 +632,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     const hitNow = new Set<number>()
     for (const e of obs.events) {
       if (e.type === "kill") ourKills++
-      else if (e.type === "hit") hitNow.add(e.target)
+      else if (e.type === "hit") { hitNow.add(e.target); lastHitOn.set(e.target, t) }
     }
     if (!ffa) {
       const totalMechs = cfg.match.mechs ?? 16
@@ -579,15 +643,22 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         if (!end) continue
         for (const m of obs.mechs) {
           if (m.kind !== "mech" || m.id === b.by) continue
-          if (hyp2(end[0], end[1], m.pos[0], m.pos[1]) < 4) { infight += 1; break }
+          // ignore shots aimed at us that happen to end near someone standing next to us
+          if (P.strictDetect && hyp2(end[0], end[1], x, y) < 15) break
+          if (hyp2(end[0], end[1], m.pos[0], m.pos[1]) < 4) { infight += 1; if (process.env.FFA_DEBUG) console.error(`beam t=${t} by=${b.by} kind=${b.kind} on=${m.id} dUs=${hyp2(end[0], end[1], x, y).toFixed(1)}`); break }
         }
       }
       for (const m of obs.mechs) {
         if (m.kind !== "mech" || m.hp == null) continue
         const prev = lastHp.get(m.id)
-        if (prev != null && m.hp < prev - 40 && !hitNow.has(m.id)) infight += 0.5
+        const recentHit = P.strictDetect && t - (lastHitOn.get(m.id) ?? -99) < 0.6
+        if (prev != null && m.hp < prev - 40 && !hitNow.has(m.id) && !recentHit) { infight += 0.5; if (process.env.FFA_DEBUG) console.error(`hpdrop t=${t} id=${m.id} ${prev}->${m.hp}`) }
       }
-      if (P.ffaMode && ((othersDead >= 2 && t < 120) || (othersDead >= 3 && t < 200) || othersDead >= 6 || infight >= 3)) ffa = true
+      const d1 = P.strictDetect ? P.ffaDead1 : 2, d2 = P.strictDetect ? P.ffaDead2 : 3, d3 = P.strictDetect ? P.ffaDead3 : 6
+      if (P.ffaMode && ((othersDead >= d1 && t < 120) || (othersDead >= d2 && t < 200) || othersDead >= d3 || infight >= (P.strictDetect ? P.ffaInfight : 3))) {
+        ffa = true
+        if (process.env.FFA_DEBUG) console.error(`ffa t=${t} dead=${othersDead} kills=${ourKills} alive=${obs.alive} infight=${infight}`)
+      }
     }
     for (const m of obs.mechs) if (m.kind === "mech" && m.hp != null) lastHp.set(m.id, m.hp)
     for (const s of obs.sounds) {
@@ -612,6 +683,41 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       } else jinkiness.set(m.id, { vx: m.vel[0], vy: m.vel[1], t, acc: j ? j.acc : 0 })
     }
     for (const m of obs.mechs) if (m.kind === "mech") recentMechs.set(m.id, { pos: [m.pos[0], m.pos[1], m.pos[2]], t })
+    if (P.aimLearn) {
+      const gsp = (me.weapons.find((w) => w?.kind === "gun") as WeaponObs | undefined)?.stats.speed ?? W.gun.speed
+      for (const m of obs.mechs) {
+        if (m.kind !== "mech") continue
+        const d = hyp2(x, y, m.pos[0], m.pos[1])
+        if (d > 260) continue
+        let tk = tracks.get(m.id)
+        if (!tk || t - tk.seen > 1.5) { tk = { h: [], pend: [], sc: LEAD_K.map((k) => (k === 1 ? 0.62 : k === 0.75 || k === -3 ? 0.6 : 0.58)), n: 0, seen: t }; tracks.set(m.id, tk) }
+        tk.seen = t
+        tk.h.push({ t, x: m.pos[0], y: m.pos[1], vx: m.vel[0], vy: m.vel[1] })
+        while (tk.h.length > 24) tk.h.shift()
+        // score predictions that have come due
+        for (let i = tk.pend.length - 1; i >= 0; i--) {
+          const q = tk.pend[i]
+          if (q.due > t) continue
+          const a = trackAt(tk, q.due)
+          tk.pend.splice(i, 1)
+          if (!a) continue
+          for (let k = 0; k < LEAD_K.length; k++) {
+            const lat = Math.abs((a[0] - q.px[k]) * q.ux + (a[1] - q.py[k]) * q.uy)
+            tk.sc[k] += ((lat < q.r ? 1 : 0) - tk.sc[k]) * 0.08
+          }
+          tk.n++
+        }
+        // new predictions for a shot fired now
+        if (d > 8) {
+          const tau = 0.075 + Math.max(0, d - 3) / gsp
+          const ux = -(m.pos[1] - y) / d, uy = (m.pos[0] - x) / d
+          const px: number[] = [], py: number[] = []
+          for (const k of LEAD_K) { const v = predVel(tk, k, m.vel[0], m.vel[1], tau); px.push(m.pos[0] + v[0] * tau); py.push(m.pos[1] + v[1] * tau) }
+          tk.pend.push({ due: t + tau, ux, uy, r: targetRadius(m) + 0.2, px, py })
+        }
+      }
+      for (const [id, tk] of tracks) if (t - tk.seen > 3) tracks.delete(id)
+    }
     for (const [id, r] of recentMechs) if (t - r.t > 3) recentMechs.delete(id)
 
     // --- zone ---
@@ -832,7 +938,15 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         const j = jinkiness.get(fightTarget.id)
         if (j) ls = Math.max(P.leadMin, Math.min(1, 1 - (j.acc - P.adaptiveLead) / (2 * P.adaptiveLead)))
       }
-      vel[0] *= ls; vel[1] *= ls
+      let lv0 = vel[0] * ls, lv1 = vel[1] * ls
+      const tk = P.aimLearn && fightTarget.kind === "mech" ? tracks.get(fightTarget.id) : undefined
+      if (tk && tk.n >= 6) {
+        let bk = 0
+        for (let k = 1; k < LEAD_K.length; k++) if (tk.sc[k] > tk.sc[bk]) bk = k
+        const v = predVel(tk, LEAD_K[bk], fightTarget.vel[0], fightTarget.vel[1], 0.075 + Math.max(0, d - 3) / (gun?.stats.speed ?? W.gun.speed))
+        lv0 = v[0]; lv1 = v[1]
+      }
+      vel[0] = lv0; vel[1] = lv1
       const gspeed = gun?.stats.speed ?? W.gun.speed
       const ap = lead(x + Math.cos(me.aim[0]) * 3, y + Math.sin(me.aim[0]) * 3, mz, center, vel, gspeed, 0.06)
       aimYaw = Math.atan2(ap[1] - y, ap[0] - x)
@@ -844,6 +958,10 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const gunRange = gun?.stats.range ?? W.gun.range
       const tSpeed = Math.hypot(fightTarget.vel[0], fightTarget.vel[1])
       const longShotOk = !ffa || d < 170 || tSpeed < 4
+      if (process.env.FIRESTAT && fightTarget.kind === "mech" && gun) {
+        const k = !vis ? "novis" : (gun.reload ?? 0) > 0 || (gun.ammo ?? 1) <= 0 ? "reload" : (gun.cooldown ?? 0) > 0.1 ? "cool" : !longShotOk ? "long" : e.lin >= tol + d * 0.004 ? "aim" : "fire"
+        const g = globalThis as any; g.fs = g.fs ?? {}; g.fs[k] = (g.fs[k] ?? 0) + 1
+      }
       if (gun && gunSlot >= 0 && vis && longShotOk && d < gunRange * 0.97 && e.lin < tol + d * 0.004 && (gun.ammo ?? 1) > 0 && (gun.reload ?? 0) <= 0) {
         if (gunSlot === 0) fire0 = true
         else fire1 = true
@@ -1060,7 +1178,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const d = hyp2(x, y, p[0], p[1])
       const toT = Math.atan2(p[1] - y, p[0] - x)
       if (t > strafeFlipT) {
-        strafeSign = rng.next() < 0.5 ? 1 : -1
+        strafeSign = P.flipAlt ? -strafeSign : rng.next() < 0.5 ? 1 : -1
         strafeFlipT = t + P.flipMin + rng.next() * P.flipRand
       }
       const tw = fightTarget.weapons ?? []
