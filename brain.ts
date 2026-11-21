@@ -41,7 +41,7 @@ export const PARAMS = {
   /** with selective fights in practice: fight any visible mech within this distance */
   practiceEngageRange: 60,
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
-  hunterAim: 0,
+  hunterAim: 0.2,
   hunterRange: 150,
   hunterClose: 30,
   /** allow switching to the free-for-all survival policy */
