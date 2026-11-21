@@ -71,6 +71,8 @@ export const PARAMS = {
   cubeFightRange: 25,
   /** practice: after this time, wait on a roof near the next circle instead of roaming (0 = off) */
   roofAfter: 0,
+  /** practice: before this time, actively walk to remembered drones to farm cubes (0 = off) */
+  farmUntil: 0,
   flipMin: 0.8,
   flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
@@ -926,6 +928,14 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (goal && t - goalSince > goalBudget) {
         blacklist.set(goalId, t + 30)
         goal = null
+      }
+      // drone farming: walk to the nearest remembered drone to kill it for cubes
+      if (!goal && !target && P.farmUntil > t && me.hp > me.max_hp * 0.6 && !ffa) {
+        let bd = 260
+        for (const [id, r] of knownNpcs) {
+          const d = hyp2(x, y, r.x, r.y)
+          if (d < bd && d > 35) { bd = d; goal = [r.x, r.y]; goalReason = "farm"; if (goalId !== id) { goalId = id; goalSince = t; goalBudget = 8 + d / 7 } }
+        }
       }
       // supply drop
       if (!goal && !target) {
