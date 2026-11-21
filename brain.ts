@@ -65,6 +65,8 @@ export const PARAMS = {
   hpWeight: 0.05,
   /** fraction of the target's velocity used for gun lead */
   leadScale: 1,
+  /** per-decision smoothing factor for target velocity used in lead (1 = raw) */
+  velSmooth: 1,
   /** fight movement: irregular jinks across the line of fire (0 = off; value = weight of range keeping) */
   jink: 0,
   jinkMin: 0.3,
@@ -176,6 +178,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let dodgeDir = 0
   let stuckCount = 0
   let jinkUntil = -1
+  const velEma = new Map<number, { vx: number; vy: number; t: number }>()
   let jinkYaw = 0
   let jinkSpeed = 1
   let lastHitBy = -1
@@ -803,6 +806,12 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const d = hyp2(x, y, p[0], p[1])
       const center: V3 = [p[0], p[1], p[2] + h]
       const vel: V3 = [fightTarget.vel[0], fightTarget.vel[1], Math.abs(fightTarget.vel[2]) > 1.5 ? fightTarget.vel[2] * 0.5 : 0]
+      // velocity smoothing per target (jinking targets): exponential average of observed velocity
+      if (P.velSmooth < 1) {
+        const e = velEma.get(fightTarget.id)
+        if (e && t - e.t < 0.5) { e.vx += (vel[0] - e.vx) * P.velSmooth; e.vy += (vel[1] - e.vy) * P.velSmooth; e.t = t; vel[0] = e.vx; vel[1] = e.vy }
+        else velEma.set(fightTarget.id, { vx: vel[0], vy: vel[1], t })
+      }
       // lead damping: strafing targets reverse often, so trust only part of their current velocity
       vel[0] *= P.leadScale; vel[1] *= P.leadScale
       const gspeed = gun?.stats.speed ?? W.gun.speed
