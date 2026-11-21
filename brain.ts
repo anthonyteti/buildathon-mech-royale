@@ -67,6 +67,10 @@ export const PARAMS = {
   dodgeMortar: true,
   /** below 60% HP with no target, move out of sight of the last threat */
   healCover: true,
+  /** go for cubes this far away even while a target is in view */
+  cubeFightRange: 25,
+  /** practice: after this time, wait on a roof near the next circle instead of roaming (0 = off) */
+  roofAfter: 0,
   flipMin: 0.8,
   flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
@@ -217,6 +221,31 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     }
     return best
   }
+
+  /** A flat roof spot 8-30 m up, near an edge, inside the circle, close to (nx,ny); null if none. */
+  function pickRoof(nx: number, ny: number, rad: number, cx: number, cy: number, rIn: number): [number, number] | null {
+    let best: [number, number] | null = null, bestSc = -Infinity
+    for (let k = 0; k < 120; k++) {
+      const a = rng.next() * TAU, r = Math.sqrt(rng.next()) * rad
+      const px = nx + Math.cos(a) * r, py = ny + Math.sin(a) * r
+      if (!map.inBounds(px, py) || hyp2(px, py, cx, cy) > rIn) continue
+      const pz = map.topAt(px, py), g = map.groundAt(px, py)
+      if (pz - g < 8 || pz - g > 30) continue
+      let flat = true, edges = 0
+      for (let q = 0; q < 8 && flat; q++) {
+        const ax = Math.cos(q * 0.785), ay = Math.sin(q * 0.785)
+        const h3 = map.topAt(px + ax * 3.5, py + ay * 3.5)
+        if (Math.abs(h3 - pz) > 1) flat = false
+        if (map.topAt(px + ax * 8, py + ay * 8) < pz - 4) edges++
+      }
+      if (!flat || edges === 0 || edges > 4) continue
+      const sc = -r / 60 - Math.abs(edges - 2) * 0.2
+      if (sc > bestSc) { bestSc = sc; best = [px, py] }
+    }
+    return best
+  }
+  let roofSpot: [number, number] | null = null
+  let roofNc: [number, number] = [1e9, 1e9]
 
   /** Pull a goal point inside the current (moving) circle, keeping a margin from its edge. */
   function clampToZone(g: [number, number], zn: { cx: number; cy: number; r: number }): [number, number] {
@@ -886,7 +915,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
           if (goalId !== id) { goalId = id; goalSince = t; goalBudget = 8 + d / 7 }
         }
       }
-      for (const c of obs.cubes) consider(c.id, c.pos[0], c.pos[1], c.pos[2], target ? 25 : 90, 30, "cube")
+      for (const c of obs.cubes) consider(c.id, c.pos[0], c.pos[1], c.pos[2], target ? P.cubeFightRange : 90, 30, "cube")
       const kindBias: Record<string, number> = {}
       for (const k of ["lightning", "laser", "mortar"]) kindBias[k] = wprio[k] === 3 ? 40 : wprio[k] === 2 ? 15 : 0
       for (const [id, kp] of knownPickups) {
@@ -1133,6 +1162,13 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
           wanderGoal = [ncx + Math.cos(a) * rr, ncy + Math.sin(a) * rr]
         }
         wanderT = t
+      }
+      if (!ffa && P.roofAfter > 0 && t > P.roofAfter && !finalPhase && zone.next_radius > 30) {
+        if (hyp2(roofNc[0], roofNc[1], ncx, ncy) > 1) {
+          roofNc = [ncx, ncy]
+          roofSpot = pickRoof(x, y, 150, ncx, ncy, zone.next_radius * 0.8)
+        }
+        if (roofSpot) { wanderGoal = roofSpot; mode = "roof" }
       }
       if (finalPhase) wanderGoal = clampToZone([ncx, ncy], zn)
       const dw = hyp2(x, y, wanderGoal[0], wanderGoal[1])
