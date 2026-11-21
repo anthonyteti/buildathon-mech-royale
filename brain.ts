@@ -43,13 +43,13 @@ export const PARAMS = {
   /** practice: instead of the plain engage range, fight mechs that aim at us (within this many radians; 0 = off) out to hunterRange, and any mech within hunterClose */
   hunterAim: 0,
   /** practice: from this time on, wait in a sheltered spot inside the next circle instead of roaming (0 = off) */
-  practiceHold: 15,
+  practiceHold: 0,
   /** practice: with no fight, face and hide from (into cover, slow and silent) any mech we are not fighting within this range (0 = off) */
   practiceHide: 0,
   /** practice: weight of shelter vs distance when picking a hold spot (1 = as in free-for-all) */
   holdCoverWeight: 1,
   /** practice: while holding, go for cubes only this far away */
-  holdCubeRange: 70,
+  holdCubeRange: 35,
   /** practice: below this HP fraction, start no fights by proximity (only attackers, nearly dead mechs, current target); 0 = off */
   practiceCalmHp: 0,
   hunterRange: 150,
@@ -116,9 +116,9 @@ export const PARAMS = {
   /** free-for-all: also fight a mech that others damaged in the last 4 s, below thirdPartyFrac HP, within weakRange (0 = off) */
   thirdPartyFrac: 0,
   /** free-for-all: with two or more mechs hitting us, fight from a spot hidden from the others */
-  multiCover: false,
+  multiCover: true,
   /** apply multiCover / multiRetreat in practice too */
-  multiPractice: false,
+  multiPractice: true,
   /** free-for-all: with two or more mechs hitting us and HP below this fraction, break off to cover (0 = off) */
   multiRetreat: 0,
   /** free-for-all: hold on a deep roof spot (no edge within 8 m) inside the next circle instead of a sheltered ground spot */
