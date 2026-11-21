@@ -88,7 +88,7 @@ export const PARAMS = {
   /** gun lead learned per target: score several lead predictors on each mech's observed track and aim with the best */
   aimLearn: true,
   /** strafe flips always reverse direction (instead of a random new side) */
-  flipAlt: true,
+  flipAlt: false,
   /** multiplier on the aim error we accept before firing the gun */
   fireTol: 1,
   /** sidestep incoming gun bullets */
@@ -105,8 +105,8 @@ export const PARAMS = {
   roofAfter: 0,
   /** practice: before this time, actively walk to remembered drones to farm cubes (0 = off) */
   farmUntil: 0,
-  flipMin: 0.35,
-  flipRand: 0.4,
+  flipMin: 0.8,
+  flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
   kite: false,
   /** score bonus (metres) for a mech that hurt us in the last 4 s */
