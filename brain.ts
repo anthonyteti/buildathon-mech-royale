@@ -54,6 +54,13 @@ export const PARAMS = {
   npcAlways: false,
   /** practice upgrade order override (comma list, best first); empty = built-in */
   upgradeOrder: "",
+  /** keep away from drones (they open fire within 45 m) while mechs are around or we are hurt */
+  npcAvoid: false,
+  /** strafe direction flips every flipMin + rand * flipRand seconds */
+  /** target score: metres added per HP point of the target (lower HP = preferred) */
+  hpWeight: 0.05,
+  flipMin: 0.8,
+  flipRand: 1.4,
   /** when two or more mechs are on us, back off to a longer range */
   kite: false,
   /** score bonus (metres) for a mech that hurt us in the last 4 s */
@@ -143,6 +150,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let lastHitBy = -1
   let fightSpot: { t: number; p: [number, number] | null; id: number } | null = null
   let healSpot: [number, number] | null = null
+  const knownNpcs = new Map<number, { x: number; y: number; t: number }>()
   const recentMechs = new Map<number, { pos: [number, number, number]; t: number }>()
   let lastHitBearing = 0
   let lastHitT = -99
@@ -528,6 +536,9 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       }
     }
 
+    for (const m of obs.mechs) if (m.kind === "npc" && (m.hp ?? 1) > 0) knownNpcs.set(m.id, { x: m.pos[0], y: m.pos[1], t })
+    for (const e of obs.events) if (e.type === "kill" || (e.type === "hit" && e.target >= 100 && e.target < 1000)) { /* hits keep the record */ }
+    for (const [id, r] of knownNpcs) if (t - r.t > 90 || (hyp2(x, y, r.x, r.y) < 40 && !obs.mechs.some((m) => m.id === id) && t - r.t > 2)) knownNpcs.delete(id)
     for (const m of obs.mechs) if (m.kind === "mech") recentMechs.set(m.id, { pos: [m.pos[0], m.pos[1], m.pos[2]], t })
     for (const [id, r] of recentMechs) if (t - r.t > 3) recentMechs.delete(id)
 
@@ -581,7 +592,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const atk = attackers.get(m.id)
       const engageMax = weapons.some((w) => w?.kind === "laser") ? Math.max(P.maxEngage, P.laserEngage) : P.maxEngage
       if (d > engageMax && !(atk != null && t - atk < 6)) continue
-      let sc = d + (m.hp ?? 1400) / 20 + (vis ? 0 : 120)
+      let sc = d + (m.hp ?? 1400) * P.hpWeight + (vis ? 0 : 120)
       if (m.id === lastTargetId) sc -= 25
       if (m.charging) sc -= 20
       const at = attackers.get(m.id)
@@ -589,7 +600,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       if (sc < bestScore) { bestScore = sc; target = m }
     }
     let npcTarget: ActorObs | null = null
-    if (!target && me.hp > me.max_hp * 0.4 && t < 300 && !(ffa && (watch || t - lastMechSeenT < 5))) {
+    if (!target && me.hp > me.max_hp * 0.4 && t < 300 && !(P.npcAvoid && t - lastMechSeenT < 10) && !(ffa && (watch || t - lastMechSeenT < 5))) {
       let bd = Infinity
       for (const m of obs.mechs) {
         if (m.kind !== "npc") continue
@@ -956,7 +967,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
       const toT = Math.atan2(p[1] - y, p[0] - x)
       if (t > strafeFlipT) {
         strafeSign = rng.next() < 0.5 ? 1 : -1
-        strafeFlipT = t + 0.8 + rng.next() * 1.4
+        strafeFlipT = t + P.flipMin + rng.next() * P.flipRand
       }
       const tw = fightTarget.weapons ?? []
       let want: number
@@ -1181,6 +1192,25 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     // keep energy for lightning in a fight
     if (fightTarget && secW?.kind === "lightning" && me.energy < 30 && me.grounded && !zoneUrgent) boost = false
 
+    // steer clear of drones we are not fighting
+    if (P.npcAvoid && (mx !== 0 || my !== 0) && (t - lastMechSeenT < 10 || hpFrac < 0.7) && t >= stuckUntil) {
+      let rx = 0, ry = 0
+      for (const [id, r] of knownNpcs) {
+        if (fightTarget && fightTarget.id === id) continue
+        const d = hyp2(x, y, r.x, r.y)
+        if (d > 55 || d < 0.1) continue
+        const w = ((55 - d) / 55) * 1.5
+        rx += ((x - r.x) / d) * w
+        ry += ((y - r.y) / d) * w
+      }
+      if (rx !== 0 || ry !== 0) {
+        const sp = Math.hypot(mx, my)
+        const nx2 = mx / sp + rx, ny2 = my / sp + ry
+        const l = Math.hypot(nx2, ny2) || 1
+        mx = (nx2 / l) * sp
+        my = (ny2 / l) * sp
+      }
+    }
     act.move = [mx, my]
     act.boost = boost
     act.jump = jump
