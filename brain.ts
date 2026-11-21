@@ -60,6 +60,7 @@ export function makeBot(hello: Hello) {
 
   // --- memory ---
   let lastT = 0
+  let actT0 = 0
   let threatYaw: number | null = null
   let threatT = -99
   const posHist: { t: number; x: number; y: number; z: number }[] = []
@@ -70,6 +71,8 @@ export function makeBot(hello: Hello) {
   let strafeFlipT = 0
   let wanderGoal: [number, number] | null = null
   let wanderT = -99
+  let wanderFfa = false
+  let wanderNc: [number, number] = [0, 0]
   let goalId = -1
   let goalSince = 0
   const blacklist = new Map<number, number>() // id -> until t
@@ -103,6 +106,36 @@ export function makeBot(hello: Hello) {
       cy: z.center[1] + (z.next_center[1] - z.center[1]) * f,
       r: z.radius + (z.next_radius - z.radius) * f,
     }
+  }
+
+  /** Fraction of 8 directions with something solid within 16 m at body height: how sheltered a spot is. */
+  function coverScore(px: number, py: number, pz: number): number {
+    let blocked = 0
+    for (let k = 0; k < 8; k++) {
+      const a = (k * Math.PI) / 4
+      for (const r of [4, 8, 12, 16]) {
+        if (map.solid(px + Math.cos(a) * r, py + Math.sin(a) * r, pz + 5)) { blocked++; break }
+      }
+    }
+    return blocked / 8
+  }
+  /** Best sheltered, reachable-looking spot within `rad` of (nx,ny) that stays within `rIn` of the circle centre. */
+  function pickHold(nx: number, ny: number, rad: number, cx: number, cy: number, rIn: number, z: number): [number, number] {
+    let best: [number, number] = [nx, ny], bestSc = -Infinity
+    for (let k = 0; k < 40; k++) {
+      const a = rng.next() * TAU, r = k === 0 ? 0 : Math.sqrt(rng.next()) * rad
+      const px = nx + Math.cos(a) * r, py = ny + Math.sin(a) * r
+      if (!map.inBounds(px, py) || hyp2(px, py, cx, cy) > rIn + 1) continue
+      const pz = map.topAt(px, py)
+      if (pz - map.groundAt(px, py) > 30) continue
+      // the body must fit: nothing tall within 3 m
+      let fits = true
+      for (let q = 0; q < 8 && fits; q++) if (map.topAt(px + Math.cos(q * 0.785) * 3, py + Math.sin(q * 0.785) * 3) > pz + 1.2) fits = false
+      if (!fits) continue
+      const sc = coverScore(px, py, pz) - r / 120 - Math.abs(pz - z) / 200
+      if (sc > bestSc) { bestSc = sc; best = [px, py] }
+    }
+    return best
   }
 
   /** Pull a goal point inside the current (moving) circle, keeping a margin from its edge. */
@@ -265,7 +298,7 @@ export function makeBot(hello: Hello) {
       pending = { gx, gy }
     }
     if (planner.state === "running") {
-      const r = planner.step(5, me.max_energy)
+      const r = planner.step(Math.max(0.5, Math.min(5, 15 - (performance.now() - actT0))), me.max_energy)
       if (r === "done" && pending) {
         plan = { gx: pending.gx, gy: pending.gy, path: planner.path.slice(), ptr: 0, t }
         planner.state = "idle"
@@ -365,6 +398,7 @@ export function makeBot(hello: Hello) {
   }
 
   function act(obs: Observation): BotAction {
+    actT0 = performance.now()
     const me = obs.self
     const [x, y, z] = me.pos
     const t = obs.t
@@ -417,7 +451,7 @@ export function makeBot(hello: Hello) {
         const prev = lastHp.get(m.id)
         if (prev != null && m.hp < prev - 40 && !hitNow.has(m.id)) infight += 0.5
       }
-      if ((othersDead >= 4 && t < 200) || othersDead >= 6 || infight >= 3) ffa = true
+      if ((othersDead >= 2 && t < 120) || (othersDead >= 3 && t < 200) || othersDead >= 6 || infight >= 3) ffa = true
     }
     for (const m of obs.mechs) if (m.kind === "mech" && m.hp != null) lastHp.set(m.id, m.hp)
     for (const s of obs.sounds) {
@@ -443,7 +477,7 @@ export function makeBot(hello: Hello) {
     if (dCur > zn.r - 3) {
       zoneUrgent = true
       zoneYaw = Math.atan2(zone.next_center[1] - y, zone.next_center[0] - x)
-    } else if (needNext > 0 && (timeToShrink < travel + 12 || t > zone.shrink_start)) {
+    } else if (needNext > 0 && (timeToShrink < travel + (ffa ? 30 : 12) || t > zone.shrink_start)) {
       zoneUrgent = true
     }
     const finalPhase = zone.next_radius <= 1
@@ -920,11 +954,17 @@ export function makeBot(hello: Hello) {
       // wander inside the next circle
       mode = "roam"
       const nr = zone.next_radius
-      if (!wanderGoal || t - wanderT > 25 || hyp2(x, y, wanderGoal[0], wanderGoal[1]) < 6) {
+      const repick = ffa
+        ? !wanderGoal || !wanderFfa || hyp2(wanderGoal[0], wanderGoal[1], ncx, ncy) > nr * 0.6 + 1 || hyp2(wanderNc[0], wanderNc[1], ncx, ncy) > 1
+        : !wanderGoal || wanderFfa || t - wanderT > 25 || hyp2(x, y, wanderGoal[0], wanderGoal[1]) < 6
+      if (repick) {
+        wanderFfa = ffa
+        wanderNc = [ncx, ncy]
         if (ffa) {
-          // nearest comfortable point inside the next circle: minimal exposure
+          // a sheltered spot near the nearest comfortable point inside the next circle: minimal exposure
           const rIn = Math.max(0, nr * 0.6)
-          wanderGoal = dNext <= rIn ? [x, y] : [ncx + ((x - ncx) / dNext) * rIn, ncy + ((y - ncy) / dNext) * rIn]
+          const near: [number, number] = dNext <= rIn ? [x, y] : [ncx + ((x - ncx) / dNext) * rIn, ncy + ((y - ncy) / dNext) * rIn]
+          wanderGoal = pickHold(near[0], near[1], Math.min(35, Math.max(8, nr * 0.25)), ncx, ncy, rIn, z)
         } else {
           const a = rng.next() * TAU
           const rr = Math.sqrt(rng.next()) * Math.max(0, nr * 0.55)
