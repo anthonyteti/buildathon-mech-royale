@@ -67,6 +67,9 @@ export const PARAMS = {
   leadScale: 1,
   /** per-decision smoothing factor for target velocity used in lead (1 = raw) */
   velSmooth: 1,
+  /** adapt gun lead to how often the target changes velocity: acceleration (m/s^2) where lead starts dropping (0 = off) */
+  adaptiveLead: 0,
+  leadMin: 0.4,
   /** fight movement: irregular jinks across the line of fire (0 = off; value = weight of range keeping) */
   jink: 0,
   jinkMin: 0.3,
@@ -178,6 +181,7 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
   let dodgeDir = 0
   let stuckCount = 0
   let jinkUntil = -1
+  const jinkiness = new Map<number, { vx: number; vy: number; t: number; acc: number }>()
   const velEma = new Map<number, { vx: number; vy: number; t: number }>()
   let jinkYaw = 0
   let jinkSpeed = 1
@@ -598,6 +602,15 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
     for (const m of obs.mechs) if (m.kind === "npc" && (m.hp ?? 1) > 0) knownNpcs.set(m.id, { x: m.pos[0], y: m.pos[1], t })
     for (const e of obs.events) if (e.type === "kill" || (e.type === "hit" && e.target >= 100 && e.target < 1000)) { /* hits keep the record */ }
     for (const [id, r] of knownNpcs) if (t - r.t > 90 || (hyp2(x, y, r.x, r.y) < 40 && !obs.mechs.some((m) => m.id === id) && t - r.t > 2)) knownNpcs.delete(id)
+    for (const m of obs.mechs) {
+      if (m.kind !== "mech") continue
+      const j = jinkiness.get(m.id)
+      if (j && t - j.t < 0.35) {
+        const a = Math.hypot(m.vel[0] - j.vx, m.vel[1] - j.vy) / Math.max(0.05, t - j.t)
+        j.acc += (a - j.acc) * 0.15
+        j.vx = m.vel[0]; j.vy = m.vel[1]; j.t = t
+      } else jinkiness.set(m.id, { vx: m.vel[0], vy: m.vel[1], t, acc: j ? j.acc : 0 })
+    }
     for (const m of obs.mechs) if (m.kind === "mech") recentMechs.set(m.id, { pos: [m.pos[0], m.pos[1], m.pos[2]], t })
     for (const [id, r] of recentMechs) if (t - r.t > 3) recentMechs.delete(id)
 
@@ -813,7 +826,13 @@ export function makeBot(hello: Hello, overrides: Partial<typeof PARAMS> = {}) {
         else velEma.set(fightTarget.id, { vx: vel[0], vy: vel[1], t })
       }
       // lead damping: strafing targets reverse often, so trust only part of their current velocity
-      vel[0] *= P.leadScale; vel[1] *= P.leadScale
+      let ls = P.leadScale
+      if (P.adaptiveLead > 0) {
+        // how jinky is this target? EMA of horizontal acceleration magnitude
+        const j = jinkiness.get(fightTarget.id)
+        if (j) ls = Math.max(P.leadMin, Math.min(1, 1 - (j.acc - P.adaptiveLead) / (2 * P.adaptiveLead)))
+      }
+      vel[0] *= ls; vel[1] *= ls
       const gspeed = gun?.stats.speed ?? W.gun.speed
       const ap = lead(x + Math.cos(me.aim[0]) * 3, y + Math.sin(me.aim[0]) * 3, mz, center, vel, gspeed, 0.06)
       aimYaw = Math.atan2(ap[1] - y, ap[0] - x)
