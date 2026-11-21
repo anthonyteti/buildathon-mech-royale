@@ -370,10 +370,14 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
     const spread = (ws.spread_deg * Math.PI) / 180
     const yaw = m.aim[0] + rng.gauss() * spread, pitch = m.aim[1] + rng.gauss() * spread
     const dir: V3 = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch)]
-    projs.push({ id: newId(), kind: "gun", owner: m.id, pos: muzzleOf(m), vel: [dir[0] * ws.speed, dir[1] * ws.speed, dir[2] * ws.speed], dist: 0, dmg: ws.damage * dmgMult(m), range: ws.range, t0: t })
+    const pj: any = { id: newId(), kind: "gun", owner: m.id, pos: muzzleOf(m), vel: [dir[0] * ws.speed, dir[1] * ws.speed, dir[2] * ws.speed], dist: 0, dmg: ws.damage * dmgMult(m), range: ws.range, t0: t }
+    { let bt: Mech | null = null, ba = 0.15
+      for (const v of mechs) { if (!v.alive || v.id === m.id) continue; const a = Math.abs(wrap(Math.atan2(v.pos[1] - m.pos[1], v.pos[0] - m.pos[0]) - m.aim[0])); if (a < ba) { ba = a; bt = v } }
+      if (bt) { pj.tgt = bt.id; pj.tmode = String((bt.action as any)?.label ?? "").replace(/^F /, "").split(" ")[0]; pj.tv0 = [bt.vel[0], bt.vel[1]]; pj.dv = 0; pj.miss = 1e9; pj.d0 = hyp(m.pos[0], m.pos[1], bt.pos[0], bt.pos[1]) } }
+    projs.push(pj)
     w.ammo--
+    w.cooldown = Math.max(0, w.cooldown + ws.cooldown) // exact fire rate while held (carry the sub-tick remainder)
     ;(m as any).shots = ((m as any).shots ?? 0) + 1
-    w.cooldown = ws.cooldown
     if (w.ammo <= 0) w.reload = ws.reload
     emitSound("gun", m.pos, m.id)
     ;(m as any).lastShotT = t
@@ -767,6 +771,7 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
         drops.push({ id: 20000 + drops.length, pos: p, landsAt: t + cfg.drops.fall_s, progress: 0, holder: null, taken: false, calledAt: t })
       }
     }
+    if (process.env.TRAJLOG && tick % decideEvery === 0) for (const m of mechs) if (m.alive && m.id < 2) { const q: any = m; (q.traj ??= []).push([Math.round(t * 100) / 100, +m.pos[0].toFixed(2), +m.pos[1].toFixed(2), +m.vel[0].toFixed(2), +m.vel[1].toFixed(2)]) }
     if (tick % decideEvery === 0) {
       const hunters = practice ? houseHunters() : new Set<number>()
       const extActs = new Map<number, Promise<any>>()
@@ -792,6 +797,7 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
           try { a = m.ctrl.act(obs) } catch (e) { if (opt.verbose) console.error(e); a = { move: m.action.move, aim: m.action.aim } }
           timing.push(performance.now() - t0)
           a.label = (draw.take() as any)?.label
+          if (typeof a.label === "string" && a.label.startsWith("F ") && (m as any).ffaAt == null) (m as any).ffaAt = t
           if (process.env.SIMTRACE && tick % 10 === 0 && (!process.env.TRACE_ID || String(m.id) === process.env.TRACE_ID)) {
             const en = mechs.filter((v) => v.alive && v.id !== m.id).map((v) => ({ v, d: hyp(m.pos[0], m.pos[1], v.pos[0], v.pos[1]) })).filter((q) => q.d < 200).sort((p, q) => p.d - q.d).slice(0, 3)
             const dmg = (obs.events as any[]).filter((e) => e.type === "damaged").map((e) => `${e.weapon}${Math.round(e.amount)}${e.rear ? "R" : ""}`).join(",")
@@ -840,7 +846,8 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
       const fire = a.fire ?? [false, false]
       m.weapons.forEach((w, i) => {
         if (!w) return
-        w.cooldown = Math.max(0, w.cooldown - DT)
+        w.cooldown = w.kind === "gun" && w.cooldown <= DT ? w.cooldown - DT : Math.max(0, w.cooldown - DT)
+        if (w.kind === "gun" && !(fire[i] && w.ammo > 0 && w.reload <= 0) && w.cooldown < 0) w.cooldown = 0
         w.equip = Math.max(0, w.equip - DT)
         if (w.kind === "gun" && w.reload > 0) { w.reload -= DT; if (w.reload <= 0) { w.reload = 0; w.ammo = m.wstats.gun.mag } }
         const held = !!fire[i] && tick % decideEvery < decideEvery
@@ -926,7 +933,22 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
         for (const n of npcs) { if (!n.alive) continue; const s = segHitsCyl(a, b, n, cfg.npc.radius + pr, cfg.npc.height); if (s >= 0 && s < bs) { bs = s; hitN = n; hitM = null; hitC = null } }
         for (const c of crates) { if ((c.hp ?? 0) <= 0) continue; const s = segHitsCyl(a, b, c, cfg.crates.radius + pr, cfg.crates.height); if (s >= 0 && s < bs) { bs = s; hitC = c; hitM = null; hitN = null } }
       }
+      if ((p as any).tgt != null) {
+        const q: any = p, v = mechs[q.tgt]
+        const dxs = b[0] - a[0], dys = b[1] - a[1], L2 = dxs * dxs + dys * dys
+        const f = L2 > 0 ? Math.max(0, Math.min(1, ((v.pos[0] - a[0]) * dxs + (v.pos[1] - a[1]) * dys) / L2)) : 0
+        const md = Math.hypot(a[0] + dxs * f - v.pos[0], a[1] + dys * f - v.pos[1])
+        if (md < q.miss) { q.miss = md; q.dv = Math.hypot(v.vel[0] - q.tv0[0], v.vel[1] - q.tv0[1]) }
+      }
+      const endShot = (hit: boolean) => {
+        const q: any = p
+        if (q.tgt == null || p.owner >= 16) return
+        const o: any = mechs[p.owner]
+        o.shotLog = o.shotLog ?? []
+        o.shotLog.push([hit ? 1 : 0, Math.round(q.miss * 10) / 10, Math.round(q.dv * 10) / 10, Math.round(q.d0), Math.round(Math.hypot(q.tv0[0], q.tv0[1]) * 10) / 10, q.tmode])
+      }
       if (bs <= 1) {
+        endShot(!!hitM && hitM.id === (p as any).tgt)
         const at: V3 = [a[0] + (b[0] - a[0]) * bs, a[1] + (b[1] - a[1]) * bs, a[2] + (b[2] - a[2]) * bs]
         if (p.kind === "mortar") explode(p, at, hitM)
         if (hitM && p.kind === "gun" && p.owner < 16) (mechs[p.owner] as any).hits = ((mechs[p.owner] as any).hits ?? 0) + 1
@@ -940,7 +962,7 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
       }
       p.pos = b
       p.dist += segLen
-      if (p.dist > p.range || t - p.t0 > 8 || !MAP.inBounds(b[0], b[1])) projs.splice(i, 1)
+      if (p.dist > p.range || t - p.t0 > 8 || !MAP.inBounds(b[0], b[1])) { endShot(false); projs.splice(i, 1) }
     }
     // npcs
     for (const n of npcs) if (n.alive) npcStep(n)
@@ -998,7 +1020,8 @@ export async function runMatch(opt: SimOptions): Promise<{ results: MechResult[]
   const surv = mechs.filter((m) => m.alive).sort((a, b) => b.hp - a.hp)
   surv.forEach((m, i) => { m.place = i + 1; m.deathT = t })
   // dead-early end (our bots all dead): remaining house bots outlive us; places already set for the dead
-  const results: MechResult[] = mechs.map((m) => ({ id: m.id, label: m.ctrl.label, place: m.place, kills: m.kills, deathT: Math.round(m.deathT * 10) / 10, cubes: m.cubes, hp: Math.round(m.hp), cause: (m as any).cause ?? (m.alive ? "alive" : "?"), shots: (m as any).shots ?? 0, hits: (m as any).hits ?? 0, loadout: m.weapons.filter((w) => w).map((w) => w!.kind).join("+"), takenBy: (m as any).takenBy ?? {}, takenRear: Math.round((m as any).takenRear ?? 0), hitDist: (m as any).hitDist ?? {}, nAttackers: ((m as any).attackersSet?.size ?? 0), drops: (m as any).drops ?? 0, dealt: Math.round((m as any).dealt ?? 0), taken: Math.round((m as any).taken ?? 0) }))
+  const results: MechResult[] = mechs.map((m) => ({ id: m.id, label: m.ctrl.label, place: m.place, kills: m.kills, deathT: Math.round(m.deathT * 10) / 10, cubes: m.cubes, hp: Math.round(m.hp), cause: (m as any).cause ?? (m.alive ? "alive" : "?"), shots: (m as any).shots ?? 0, hits: (m as any).hits ?? 0, loadout: m.weapons.filter((w) => w).map((w) => w!.kind).join("+"), takenBy: (m as any).takenBy ?? {}, ffaAt: (m as any).ffaAt ?? null, takenRear: Math.round((m as any).takenRear ?? 0), hitDist: (m as any).hitDist ?? {}, shotLog: process.env.SHOTLOG ? (m as any).shotLog ?? [] : undefined, traj: process.env.TRAJLOG ? (m as any).traj ?? [] : undefined, nAttackers: ((m as any).attackersSet?.size ?? 0), drops: (m as any).drops ?? 0, dealt: Math.round((m as any).dealt ?? 0), taken: Math.round((m as any).taken ?? 0) }))
+  if (process.env.FIRESTAT) console.error("firestat " + JSON.stringify((globalThis as any).fs))
   if (opt.verbose) {
     timing.sort((a, b) => a - b)
     console.error(`match t=${t.toFixed(1)} act p50 ${timing[timing.length >> 1]?.toFixed(2)} p99 ${timing[Math.floor(timing.length * 0.99)]?.toFixed(2)} max ${timing[timing.length - 1]?.toFixed(2)}`)
